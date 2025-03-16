@@ -94,42 +94,58 @@
             document.getElementById('videos').appendChild(localVideo);
 
             ws.onmessage = async (message) => {
-            const data = JSON.parse(message.data);
-            console.log('📩 WebSocket received:', data);
+                const data = JSON.parse(message.data);
+                console.log('📩 WebSocket received:', data);
 
-            switch (data.type) {
-                case 'join':
-                    if (data.name !== myName) {  // Avoid creating an offer to yourself
-                        console.log(`📡 Creating offer for ${data.name}`);
-                        await createOffer(data.name);
-                    }
-                    break;
-                case 'offer':
-                    console.log(`📡 Received offer from ${data.name}`);
-                    await createAnswer(data.name, data.offer);
-                    break;
-                case 'answer':
-                    console.log(`📡 Received answer from ${data.name}`);
-                    if (peers[data.name]) {
-                        await peers[data.name].setRemoteDescription(new RTCSessionDescription(data.answer));
-                    }
-                    break;
-                case 'candidate':
-                    if (peers[data.name]) {
-                        console.log(`📡 Adding ICE candidate for ${data.name}`);
-                        await peers[data.name].addIceCandidate(new RTCIceCandidate(data.candidate));
-                    }
-                    break;
-                case 'leave': // Handle user disconnects
-                    handleUserDisconnect(data.name);
-                    break;
-            }
-        };
+                switch (data.type) {
+                    case 'join':
+                        if (data.name !== myName) {
+                            console.log(`📡 Creating offer for ${data.name}`);
+                            await createOffer(data.name);
+                        }
+                        break;
+                    case 'offer':
+                        console.log(`📡 Received offer from ${data.name}`);
+                        await createAnswer(data.name, data.offer);
+                        break;
+                    case 'answer':
+                        console.log(`📡 Received answer from ${data.name}`);
+                        if (peers[data.name]) {
+                            await peers[data.name].setRemoteDescription(new RTCSessionDescription(data.answer));
+                            console.log(`✅ Remote description set for ${data.name}`);
 
-
+                            // Apply any ICE candidates that were received before the remote description was ready
+                            if (peers[data.name].queuedCandidates) {
+                                console.log(`🚀 Applying queued ICE candidates for ${data.name}`);
+                                for (const candidate of peers[data.name].queuedCandidates) {
+                                    await peers[data.name].addIceCandidate(new RTCIceCandidate(candidate));
+                                }
+                                peers[data.name].queuedCandidates = []; // Clear queue
+                            }
+                        }
+                        break;
+                    case 'candidate':
+                        if (peers[data.name] && peers[data.name].remoteDescription) {
+                            console.log(`📡 Adding ICE candidate for ${data.name}`);
+                            await peers[data.name].addIceCandidate(new RTCIceCandidate(data.candidate));
+                        } else {
+                            console.warn(`⚠️ Queuing ICE candidate for ${data.name} (remote description not set yet)`);
+                            if (!peers[data.name].queuedCandidates) {
+                                peers[data.name].queuedCandidates = [];
+                            }
+                            peers[data.name].queuedCandidates.push(data.candidate);
+                        }
+                        break;
+                    case 'leave':
+                        handleUserDisconnect(data.name);
+                        break;
+                }
+            };
         }
 
         async function createOffer(name) {
+            console.log(`🎥 Creating WebRTC Offer for ${name}`);
+            
             const peerConnection = new RTCPeerConnection({
                 iceServers: [{ urls: 'stun:stun.l.google.com:19302' }]
             });
@@ -138,23 +154,28 @@
 
             peerConnection.onicecandidate = (event) => {
                 if (event.candidate) {
+                    console.log(`📡 Sending ICE candidate for ${name}`);
                     ws.send(JSON.stringify({ type: 'candidate', name, candidate: event.candidate }));
                 }
             };
 
             peerConnection.ontrack = (event) => {
+                console.log(`📺 Remote Track Received from ${name}`);
                 addRemoteStream(event.streams[0], name);
             };
 
             const offer = await peerConnection.createOffer();
             await peerConnection.setLocalDescription(offer);
+            console.log(`📜 Offer Created & Set for ${name}`);
 
             peers[name] = peerConnection;
-
             ws.send(JSON.stringify({ type: 'offer', name, offer }));
         }
 
+
         async function createAnswer(name, offer) {
+            console.log(`🎥 Creating WebRTC Answer for ${name}`);
+            
             const peerConnection = new RTCPeerConnection({
                 iceServers: [{ urls: 'stun:stun.l.google.com:19302' }]
             });
@@ -163,22 +184,27 @@
 
             peerConnection.onicecandidate = (event) => {
                 if (event.candidate) {
+                    console.log(`📡 Sending ICE candidate for ${name}`);
                     ws.send(JSON.stringify({ type: 'candidate', name, candidate: event.candidate }));
                 }
             };
 
             peerConnection.ontrack = (event) => {
+                console.log(`📺 Remote Track Received from ${name}`);
                 addRemoteStream(event.streams[0], name);
             };
 
             await peerConnection.setRemoteDescription(new RTCSessionDescription(offer));
+            console.log(`📜 Remote Offer Set for ${name}`);
+
             const answer = await peerConnection.createAnswer();
             await peerConnection.setLocalDescription(answer);
+            console.log(`📜 Answer Created & Set for ${name}`);
 
             peers[name] = peerConnection;
-
             ws.send(JSON.stringify({ type: 'answer', name, answer }));
         }
+
 
         function addRemoteStream(stream, name) {
             let remoteVideo = document.createElement('video');
