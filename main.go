@@ -37,10 +37,6 @@ func main() {
 	fs := http.FileServer(http.Dir("./web"))
 	http.Handle("/", fs)
 
-	// Explicitly serve JS and CSS
-	http.Handle("/app.js", http.FileServer(http.Dir("./web")))
-	http.Handle("/style.css", http.FileServer(http.Dir("./web")))
-
 	// Handle WebSockets separately
 	http.HandleFunc("/ws", handleWebSocket)
 
