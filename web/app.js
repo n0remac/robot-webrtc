@@ -20,7 +20,7 @@ async function joinSession() {
     document.getElementById('join-screen').style.display = 'none';
     document.getElementById('participant-view').style.display = 'block';
 
-    ws = new WebSocket(`ws://${window.location.host}/ws`);
+    ws = new WebSocket(`wss://${window.location.host}/ws`);
 
     ws.onopen = () => {
         console.log('Connected to signaling server');
