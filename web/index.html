@@ -57,9 +57,11 @@
         let isMuted = false;
         let isVideoStopped = false;
 
+        let myName;
+
         async function joinSession() {
-            const name = document.getElementById('name').value;
-            if (!name) {
+            myName = document.getElementById('name').value;
+            if (!myName) {
                 alert('Please enter your name');
                 return;
             }
@@ -71,7 +73,7 @@
 
             ws.onopen = () => {
                 console.log('✅ WebSocket connection opened');
-                ws.send(JSON.stringify({ type: 'join', name: name }));
+                ws.send(JSON.stringify({ type: 'join', name: myName }));
             };
             
             ws.onerror = (error) => {
