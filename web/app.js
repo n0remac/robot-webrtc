@@ -20,7 +20,7 @@ async function joinSession() {
     document.getElementById('join-screen').style.display = 'none';
     document.getElementById('participant-view').style.display = 'block';
 
-    ws = new WebSocket(`wss://${window.location.host}/ws`);
+    ws = new WebSocket(`wss://noremac.dev/ws`);
 
     ws.onopen = () => {
         console.log('✅ WebSocket connection opened');
