@@ -37,6 +37,7 @@ async function joinSession() {
     
     ws.onmessage = async (message) => {
         console.log('📩 WebSocket received:', message.data);
+    }
 
     localStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
 
