@@ -95,7 +95,6 @@
 
             ws.onmessage = async (message) => {
                 const data = JSON.parse(message.data);
-                console.log('📩 WebSocket received:', data);
 
                 switch (data.type) {
                     case 'join':
@@ -114,9 +113,9 @@
                             await peers[data.name].setRemoteDescription(new RTCSessionDescription(data.answer));
                             console.log(`✅ Remote description set for ${data.name}`);
 
-                            // Apply any ICE candidates that were received before the remote description was ready
-                            if (peers[data.name].queuedCandidates) {
-                                console.log(`🚀 Applying queued ICE candidates for ${data.name}`);
+                            // Apply queued ICE candidates if there are any
+                            if (peers[data.name].queuedCandidates && peers[data.name].queuedCandidates.length > 0) {
+                                console.log(`🚀 Applying ${peers[data.name].queuedCandidates.length} queued ICE candidates for ${data.name}`);
                                 for (const candidate of peers[data.name].queuedCandidates) {
                                     await peers[data.name].addIceCandidate(new RTCIceCandidate(candidate));
                                 }
@@ -126,12 +125,12 @@
                         break;
                     case 'candidate':
                         if (peers[data.name] && peers[data.name].remoteDescription) {
-                            console.log(`📡 Adding ICE candidate for ${data.name}`);
                             await peers[data.name].addIceCandidate(new RTCIceCandidate(data.candidate));
                         } else {
-                            console.warn(`⚠️ Queuing ICE candidate for ${data.name} (remote description not set yet)`);
+                            // Log only the first queued ICE candidate per user
                             if (!peers[data.name].queuedCandidates) {
                                 peers[data.name].queuedCandidates = [];
+                                console.warn(`⚠️ First ICE candidate queued for ${data.name} (remote description not set yet)`);
                             }
                             peers[data.name].queuedCandidates.push(data.candidate);
                         }
@@ -144,8 +143,8 @@
         }
 
         async function createOffer(name) {
-            console.log(`🎥 Creating WebRTC Offer for ${name}`);
-            
+            console.log(`📡 Sending WebRTC Offer to ${name}`);
+
             const peerConnection = new RTCPeerConnection({
                 iceServers: [{ urls: 'stun:stun.l.google.com:19302' }]
             });
@@ -154,28 +153,27 @@
 
             peerConnection.onicecandidate = (event) => {
                 if (event.candidate) {
-                    console.log(`📡 Sending ICE candidate for ${name}`);
                     ws.send(JSON.stringify({ type: 'candidate', name, candidate: event.candidate }));
                 }
             };
 
             peerConnection.ontrack = (event) => {
-                console.log(`📺 Remote Track Received from ${name}`);
+                console.log(`📺 Video stream received from ${name}`);
                 addRemoteStream(event.streams[0], name);
             };
 
             const offer = await peerConnection.createOffer();
             await peerConnection.setLocalDescription(offer);
-            console.log(`📜 Offer Created & Set for ${name}`);
 
             peers[name] = peerConnection;
             ws.send(JSON.stringify({ type: 'offer', name, offer }));
         }
 
 
+
         async function createAnswer(name, offer) {
-            console.log(`🎥 Creating WebRTC Answer for ${name}`);
-            
+            console.log(`📡 Answering WebRTC Offer from ${name}`);
+
             const peerConnection = new RTCPeerConnection({
                 iceServers: [{ urls: 'stun:stun.l.google.com:19302' }]
             });
@@ -184,22 +182,18 @@
 
             peerConnection.onicecandidate = (event) => {
                 if (event.candidate) {
-                    console.log(`📡 Sending ICE candidate for ${name}`);
                     ws.send(JSON.stringify({ type: 'candidate', name, candidate: event.candidate }));
                 }
             };
 
             peerConnection.ontrack = (event) => {
-                console.log(`📺 Remote Track Received from ${name}`);
+                console.log(`📺 Video stream received from ${name}`);
                 addRemoteStream(event.streams[0], name);
             };
 
             await peerConnection.setRemoteDescription(new RTCSessionDescription(offer));
-            console.log(`📜 Remote Offer Set for ${name}`);
-
             const answer = await peerConnection.createAnswer();
             await peerConnection.setLocalDescription(answer);
-            console.log(`📜 Answer Created & Set for ${name}`);
 
             peers[name] = peerConnection;
             ws.send(JSON.stringify({ type: 'answer', name, answer }));
@@ -207,13 +201,23 @@
 
 
         function addRemoteStream(stream, name) {
+            if (document.getElementById(`video-${name}`)) {
+                if (!peers[name].loggedDuplicate) {
+                    console.warn(`⚠️ Duplicate video for ${name}. Skipping.`);
+                    peers[name].loggedDuplicate = true; // Log only once
+                }
+                return;
+            }
+
             let remoteVideo = document.createElement('video');
             remoteVideo.srcObject = stream;
             remoteVideo.autoplay = true;
             remoteVideo.id = `video-${name}`;
             document.getElementById('videos').appendChild(remoteVideo);
-        }
 
+            // Reset duplicate warning flag when a new video is successfully added
+            peers[name].loggedDuplicate = false;
+        }
 
         function toggleMute() {
             localStream.getAudioTracks().forEach(track => track.enabled = !track.enabled);
