@@ -185,13 +185,19 @@
             document.getElementById('video-btn').textContent = isVideoStopped ? 'Start Video' : 'Stop Video';
         }
 
-        function addRemoteStream(stream) {
-            const remoteVideo = document.createElement('video');
+        function addRemoteStream(stream, name) {
+            // Check if a video element for this user already exists
+            if (document.getElementById(`video-${name}`)) {
+                console.warn(`Video element for ${name} already exists. Skipping duplicate.`);
+                return; // Exit to prevent adding duplicate videos
+            }
+
+            let remoteVideo = document.createElement('video');
             remoteVideo.srcObject = stream;
             remoteVideo.autoplay = true;
+            remoteVideo.id = `video-${name}`;
             document.getElementById('videos').appendChild(remoteVideo);
         }
-
     </script>
 </body>
 </html>
