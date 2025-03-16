@@ -45,48 +45,55 @@ func main() {
 }
 
 func handleWebSocket(w http.ResponseWriter, r *http.Request) {
-	conn, err := upgrader.Upgrade(w, r, nil)
-	if err != nil {
-		log.Println("WebSocket upgrade error:", err)
-		return
-	}
-	defer conn.Close()
+    conn, err := upgrader.Upgrade(w, r, nil)
+    if err != nil {
+        log.Println("WebSocket upgrade error:", err)
+        return
+    }
+    defer conn.Close()
 
-	clients[conn] = true
-	log.Println("✅ New user connected")
+    clients[conn] = true
+    log.Println("✅ New user connected")
 
-	for {
-		_, message, err := conn.ReadMessage()
-		if err != nil {
-			log.Println("⚠️ User disconnected:", err)
-			delete(clients, conn)
+    var userName string // Store the user's name
 
-			// Broadcast a "leave" message to all remaining clients
-			leaveMessage := Message{Type: "leave"}
-			for client := range clients {
-				client.WriteJSON(leaveMessage)
-			}
-			break
-		}
+    for {
+        _, message, err := conn.ReadMessage()
+        if err != nil {
+            log.Println("⚠️ User disconnected:", err)
+            delete(clients, conn)
 
-		var msg Message
-		if err := json.Unmarshal(message, &msg); err != nil {
-			log.Println("❌ JSON Unmarshal error:", err)
-			continue
-		}
+            // Broadcast "leave" message with the user's name
+            leaveMessage := Message{Type: "leave", Name: userName}
+            for client := range clients {
+                client.WriteJSON(leaveMessage)
+            }
+            break
+        }
 
-		// Broadcast message to other users
-		for client := range clients {
-			if client != conn {
-				err := client.WriteJSON(msg)
-				if err != nil {
-					log.Println("⚠️ WebSocket write error:", err)
-					client.Close()
-					delete(clients, client)
-				}
-			}
-		}
-	}
+        var msg Message
+        if err := json.Unmarshal(message, &msg); err != nil {
+            log.Println("❌ JSON Unmarshal error:", err)
+            continue
+        }
+
+        // Store the username when they join
+        if msg.Type == "join" {
+            userName = msg.Name
+        }
+
+        // Broadcast the message to all other clients
+        for client := range clients {
+            if client != conn {
+                err := client.WriteJSON(msg)
+                if err != nil {
+                    log.Println("⚠️ WebSocket write error:", err)
+                    client.Close()
+                    delete(clients, client)
+                }
+            }
+        }
+    }
 }
 
 func createPeerConnection() (*webrtc.PeerConnection, error) {

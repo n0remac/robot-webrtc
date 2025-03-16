@@ -92,27 +92,38 @@
             document.getElementById('videos').appendChild(localVideo);
 
             ws.onmessage = async (message) => {
-                const data = JSON.parse(message.data);
-                console.log('📩 WebSocket received:', data);
+            const data = JSON.parse(message.data);
+            console.log('📩 WebSocket received:', data);
 
-                switch (data.type) {
-                    case 'join':
-                        createOffer(data.name);
-                        break;
-                    case 'offer':
-                        createAnswer(data.name, data.offer);
-                        break;
-                    case 'answer':
+            switch (data.type) {
+                case 'join':
+                    if (data.name !== myName) {  // Avoid creating an offer to yourself
+                        console.log(`📡 Creating offer for ${data.name}`);
+                        await createOffer(data.name);
+                    }
+                    break;
+                case 'offer':
+                    console.log(`📡 Received offer from ${data.name}`);
+                    await createAnswer(data.name, data.offer);
+                    break;
+                case 'answer':
+                    console.log(`📡 Received answer from ${data.name}`);
+                    if (peers[data.name]) {
                         await peers[data.name].setRemoteDescription(new RTCSessionDescription(data.answer));
-                        break;
-                    case 'candidate':
+                    }
+                    break;
+                case 'candidate':
+                    if (peers[data.name]) {
+                        console.log(`📡 Adding ICE candidate for ${data.name}`);
                         await peers[data.name].addIceCandidate(new RTCIceCandidate(data.candidate));
-                        break;
-                    case 'leave': // Handle user disconnects
-                        handleUserDisconnect(data.name);
-                        break;
-                }
-            };
+                    }
+                    break;
+                case 'leave': // Handle user disconnects
+                    handleUserDisconnect(data.name);
+                    break;
+            }
+        };
+
 
         }
 
