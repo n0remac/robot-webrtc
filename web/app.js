@@ -23,9 +23,20 @@ async function joinSession() {
     ws = new WebSocket(`wss://${window.location.host}/ws`);
 
     ws.onopen = () => {
-        console.log('Connected to signaling server');
+        console.log('✅ WebSocket connection opened');
         ws.send(JSON.stringify({ type: 'join', name: name }));
     };
+    
+    ws.onerror = (error) => {
+        console.error('❌ WebSocket Error:', error);
+    };
+    
+    ws.onclose = () => {
+        console.warn('⚠️ WebSocket connection closed');
+    };
+    
+    ws.onmessage = async (message) => {
+        console.log('📩 WebSocket received:', message.data);
 
     localStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
 
