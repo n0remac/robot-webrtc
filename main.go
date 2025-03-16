@@ -44,37 +44,43 @@ func main() {
 	log.Fatal(http.ListenAndServe(webPort, nil))
 }
 
-// Handles WebSocket messages and broadcasts them
 func handleWebSocket(w http.ResponseWriter, r *http.Request) {
 	conn, err := upgrader.Upgrade(w, r, nil)
 	if err != nil {
-		log.Println(err)
+		log.Println("WebSocket upgrade error:", err)
 		return
 	}
 	defer conn.Close()
 
 	clients[conn] = true
+	log.Println("✅ New user connected")
 
 	for {
 		_, message, err := conn.ReadMessage()
 		if err != nil {
-			log.Println("Error reading message:", err)
+			log.Println("⚠️ User disconnected:", err)
 			delete(clients, conn)
+
+			// Broadcast a "leave" message to all remaining clients
+			leaveMessage := Message{Type: "leave"}
+			for client := range clients {
+				client.WriteJSON(leaveMessage)
+			}
 			break
 		}
 
 		var msg Message
 		if err := json.Unmarshal(message, &msg); err != nil {
-			log.Println("Error unmarshaling message:", err)
+			log.Println("❌ JSON Unmarshal error:", err)
 			continue
 		}
 
-		// Broadcast the message to all clients except sender
+		// Broadcast message to other users
 		for client := range clients {
 			if client != conn {
 				err := client.WriteJSON(msg)
 				if err != nil {
-					log.Println("Error writing JSON:", err)
+					log.Println("⚠️ WebSocket write error:", err)
 					client.Close()
 					delete(clients, client)
 				}

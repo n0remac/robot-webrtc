@@ -82,10 +82,7 @@
                 console.warn('⚠️ WebSocket connection closed');
             };
             
-            ws.onmessage = async (message) => {
-                console.log('📩 WebSocket received:', message.data);
-            }
-
+     
             localStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
 
             const localVideo = document.createElement('video');
@@ -96,6 +93,8 @@
 
             ws.onmessage = async (message) => {
                 const data = JSON.parse(message.data);
+                console.log('📩 WebSocket received:', data);
+
                 switch (data.type) {
                     case 'join':
                         createOffer(data.name);
@@ -109,8 +108,12 @@
                     case 'candidate':
                         await peers[data.name].addIceCandidate(new RTCIceCandidate(data.candidate));
                         break;
+                    case 'leave': // Handle user disconnects
+                        handleUserDisconnect(data.name);
+                        break;
                 }
             };
+
         }
 
         async function createOffer(name) {
@@ -198,6 +201,25 @@
             remoteVideo.id = `video-${name}`;
             document.getElementById('videos').appendChild(remoteVideo);
         }
+
+        function handleUserDisconnect(name) {
+            console.log(`🚪 User ${name} disconnected`);
+
+            // Remove video element if it exists
+            const videoElement = document.getElementById(`video-${name}`);
+            if (videoElement) {
+                videoElement.remove();
+                console.log(`🗑 Removed video for ${name}`);
+            }
+
+            // Close and delete the peer connection
+            if (peers[name]) {
+                peers[name].close();
+                delete peers[name];
+                console.log(`🔌 Closed peer connection for ${name}`);
+            }
+        }
+
     </script>
 </body>
 </html>
