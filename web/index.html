@@ -114,13 +114,12 @@
                             await peers[data.name].setRemoteDescription(new RTCSessionDescription(data.answer));
                             console.log(`✅ Remote description set for ${data.name}`);
 
-                            // Apply any queued ICE candidates
                             if (peers[data.name].queuedCandidates && peers[data.name].queuedCandidates.length > 0) {
                                 console.log(`🚀 Applying ${peers[data.name].queuedCandidates.length} queued ICE candidates for ${data.name}`);
                                 for (const candidate of peers[data.name].queuedCandidates) {
                                     await peers[data.name].addIceCandidate(new RTCIceCandidate(candidate));
                                 }
-                                peers[data.name].queuedCandidates = []; // Clear queue
+                                peers[data.name].queuedCandidates = [];
                             }
                         } else {
                             console.warn(`⚠️ No peer connection found for ${data.name} when setting remote description!`);
@@ -134,14 +133,12 @@
                             if (!peers[data.name]) {
                                 peers[data.name] = { queuedCandidates: [] };
                             }
-                            if (!peers[data.name].queuedCandidates) {
-                                peers[data.name].queuedCandidates = [];
-                            }
                             console.warn(`⚠️ Queuing ICE candidate for ${data.name} (remote description not set yet)`);
                             peers[data.name].queuedCandidates.push(data.candidate);
                         }
                         break;
                     case 'leave':
+                        console.log(`🚪 Received leave message for ${data.name}`);
                         handleUserDisconnect(data.name);
                         break;
                 }
@@ -247,22 +244,19 @@
         }
 
         function addRemoteStream(stream, name) {
-            if (document.getElementById(`video-${name}`)) {
-                if (!peers[name].loggedDuplicate) {
-                    console.warn(`⚠️ Duplicate video for ${name}. Skipping.`);
-                    peers[name].loggedDuplicate = true; // Log only once
-                }
+            const videoId = `video-${name}`; // Ensure consistent ID naming
+
+            if (document.getElementById(videoId)) {
+                console.warn(`⚠️ Duplicate video for ${name}. Skipping.`);
                 return;
             }
 
             let remoteVideo = document.createElement('video');
             remoteVideo.srcObject = stream;
             remoteVideo.autoplay = true;
-            remoteVideo.id = `video-${name}`;
+            remoteVideo.id = videoId;
             document.getElementById('videos').appendChild(remoteVideo);
-
-            // Reset duplicate warning flag when a new video is successfully added
-            peers[name].loggedDuplicate = false;
+            console.log(`📺 Added remote video for ${name}`);
         }
 
         function toggleMute() {
@@ -280,20 +274,25 @@
         function handleUserDisconnect(name) {
             console.log(`🚪 User ${name} disconnected`);
 
-            // Remove video element if it exists
+            // ✅ Remove video element if it exists
             const videoElement = document.getElementById(`video-${name}`);
             if (videoElement) {
                 videoElement.remove();
                 console.log(`🗑 Removed video for ${name}`);
+            } else {
+                console.warn(`⚠️ Video element for ${name} not found.`);
             }
 
-            // Close and delete the peer connection
+            // ✅ Close and delete the peer connection
             if (peers[name]) {
+                console.log(`🔌 Closing peer connection for ${name}`);
                 peers[name].close();
                 delete peers[name];
-                console.log(`🔌 Closed peer connection for ${name}`);
+            } else {
+                console.warn(`⚠️ No peer connection found for ${name}.`);
             }
         }
+
 
     </script>
 </body>
