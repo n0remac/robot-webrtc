@@ -147,11 +147,11 @@
                     case 'leave':
                         console.log(`🚪 Received leave message for ${data.name}`);
 
-                        if (peers[data.name]) {
-                            handleUserDisconnect(data.name); // ✅ Call cleanup first
-                        } else {
-                            console.warn(`⚠️ No peer connection found for ${data.name}, skipping cleanup.`);
+                        if (!peers[data.name]) {
+                            console.warn(`⚠️ No peer connection found for ${data.name} at time of leave. Removing video anyway.`);
                         }
+
+                        handleUserDisconnect(data.name); // ✅ Always call cleanup
                         break;
                 }
             };
@@ -268,7 +268,7 @@
         function handleUserDisconnect(name) {
             console.log(`🚪 User ${name} disconnected`);
 
-            // ✅ Ensure correct video ID
+            // ✅ Ensure the video ID is correctly formatted
             const videoId = `video-${name}`;
             const videoElement = document.getElementById(videoId);
 
@@ -279,13 +279,13 @@
                 console.warn(`⚠️ Video element for ${name} not found.`);
             }
 
-            // ✅ Ensure the peer connection exists before trying to close it
+            // ✅ Ensure the peer connection exists before closing it
             if (peers[name]) {
                 console.log(`🔌 Closing peer connection for ${name}`);
                 peers[name].close();
                 delete peers[name];
             } else {
-                console.warn(`⚠️ No peer connection found for ${name}.`);
+                console.warn(`⚠️ No peer connection found for ${name}, but video was removed.`);
             }
         }
     </script>
