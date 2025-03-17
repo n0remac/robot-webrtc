@@ -182,14 +182,18 @@
         async function createAnswer(name, offer) {
             console.log(`📡 Answering WebRTC Offer from ${name}`);
 
+            // ✅ Create a new PeerConnection
             const peerConnection = new RTCPeerConnection({
                 iceServers: [{ urls: 'stun:stun.l.google.com:19302' }]
             });
 
-            peers[name] = peerConnection; // ✅ Store the connection first
+            // ✅ Store the peer connection first
+            peers[name] = peerConnection;
 
+            // ✅ Add local media tracks (video & audio)
             localStream.getTracks().forEach(track => peerConnection.addTrack(track, localStream));
 
+            // ✅ Handle new ICE candidates
             peerConnection.onicecandidate = (event) => {
                 if (event.candidate) {
                     console.log(`📡 Sending ICE candidate for ${name}`);
@@ -197,20 +201,49 @@
                 }
             };
 
+            // ✅ Handle incoming media streams
             peerConnection.ontrack = (event) => {
                 console.log(`📺 Video stream received from ${name}`);
                 addRemoteStream(event.streams[0], name);
             };
 
-            await peerConnection.setRemoteDescription(new RTCSessionDescription(offer));
-            console.log(`✅ Remote offer set for ${name}`);
+            // ✅ Handle connection state changes (Detect failures)
+            peerConnection.oniceconnectionstatechange = () => {
+                if (peerConnection.iceConnectionState === 'failed') {
+                    console.warn(`⚠️ ICE connection failed for ${name}, attempting restart`);
+                    peerConnection.restartIce(); // Restart ICE if failure detected
+                }
+            };
 
-            const answer = await peerConnection.createAnswer();
-            await peerConnection.setLocalDescription(answer);
+            // ✅ Set the remote description (received offer)
+            try {
+                await peerConnection.setRemoteDescription(new RTCSessionDescription(offer));
+                console.log(`✅ Remote offer set for ${name}`);
+            } catch (error) {
+                console.error(`❌ Error setting remote description: ${error}`);
+                return;
+            }
 
-            console.log(`✅ Answer created and local description set for ${name}`);
+            // ✅ Check and apply queued ICE candidates
+            if (peers[name].queuedCandidates && peers[name].queuedCandidates.length > 0) {
+                console.log(`🚀 Applying queued ICE candidates for ${name}`);
+                for (const candidate of peers[name].queuedCandidates) {
+                    await peers[name].addIceCandidate(new RTCIceCandidate(candidate));
+                }
+                peers[name].queuedCandidates = []; // Clear queue after applying
+            }
 
-            ws.send(JSON.stringify({ type: 'answer', name, answer }));
+            // ✅ Create an answer and set local description
+            try {
+                const answer = await peerConnection.createAnswer();
+                await peerConnection.setLocalDescription(answer);
+                console.log(`✅ Answer created and local description set for ${name}`);
+
+                // ✅ Send the answer back to the offerer
+                ws.send(JSON.stringify({ type: 'answer', name, answer }));
+            } catch (error) {
+                console.error(`❌ Error creating or setting answer: ${error}`);
+            }
         }
 
         function addRemoteStream(stream, name) {
@@ -242,20 +275,6 @@
             localStream.getVideoTracks().forEach(track => track.enabled = !track.enabled);
             isVideoStopped = !isVideoStopped;
             document.getElementById('video-btn').textContent = isVideoStopped ? 'Start Video' : 'Stop Video';
-        }
-
-        function addRemoteStream(stream, name) {
-            // Check if a video element for this user already exists
-            if (document.getElementById(`video-${name}`)) {
-                console.warn(`Video element for ${name} already exists. Skipping duplicate.`);
-                return; // Exit to prevent adding duplicate videos
-            }
-
-            let remoteVideo = document.createElement('video');
-            remoteVideo.srcObject = stream;
-            remoteVideo.autoplay = true;
-            remoteVideo.id = `video-${name}`;
-            document.getElementById('videos').appendChild(remoteVideo);
         }
 
         function handleUserDisconnect(name) {
