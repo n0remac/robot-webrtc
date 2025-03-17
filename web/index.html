@@ -66,6 +66,8 @@
                 return;
             }
 
+            myUUID = generateUUID();
+
             document.getElementById('join-screen').style.display = 'none';
             document.getElementById('participant-view').style.display = 'block';
 
@@ -73,7 +75,7 @@
 
             ws.onopen = () => {
                 console.log('✅ WebSocket connection opened');
-                ws.send(JSON.stringify({ type: 'join', name: myName }));
+                ws.send(JSON.stringify({ type: 'join', uuid: myUUID, name: myName }));
             };
             
             ws.onerror = (error) => {
@@ -99,59 +101,54 @@
 
                 switch (data.type) {
                     case 'join':
-                        if (data.name !== myName) {
-                            console.log(`📡 Creating offer for ${data.name}`);
-                            await createOffer(data.name);
+                        if (data.uuid !== myUUID) { // ✅ Compare UUIDs instead of names
+                            console.log(`📡 Creating offer for ${data.uuid}`);
+                            await createOffer(data.uuid);
                         }
                         break;
                     case 'offer':
-                        console.log(`📡 Received offer from ${data.name}`);
-                        await createAnswer(data.name, data.offer);
+                        console.log(`📡 Received offer from ${data.uuid}`);
+                        await createAnswer(data.uuid, data.offer);
                         break;
                     case 'answer':
-                        console.log(`📡 Received answer from ${data.name}`);
-                        if (peers[data.name]) {
-                            await peers[data.name].setRemoteDescription(new RTCSessionDescription(data.answer));
-                            console.log(`✅ Remote description set for ${data.name}`);
+                        console.log(`📡 Received answer from ${data.uuid}`);
+                        if (peers[data.uuid]) {
+                            await peers[data.uuid].setRemoteDescription(new RTCSessionDescription(data.answer));
+                            console.log(`✅ Remote description set for ${data.uuid}`);
 
-                            if (peers[data.name].queuedCandidates && peers[data.name].queuedCandidates.length > 0) {
-                                console.log(`🚀 Applying queued ICE candidates for ${data.name}`);
-                                for (const candidate of peers[data.name].queuedCandidates) {
-                                    await peers[data.name].addIceCandidate(new RTCIceCandidate(candidate));
+                            if (peers[data.uuid].queuedCandidates && peers[data.uuid].queuedCandidates.length > 0) {
+                                console.log(`🚀 Applying queued ICE candidates for ${data.uuid}`);
+                                for (const candidate of peers[data.uuid].queuedCandidates) {
+                                    await peers[data.uuid].addIceCandidate(new RTCIceCandidate(candidate));
                                 }
-                                peers[data.name].queuedCandidates = [];
+                                peers[data.uuid].queuedCandidates = [];
                             }
                         } else {
-                            console.warn(`⚠️ No peer connection found for ${data.name} when setting remote description!`);
+                            console.warn(`⚠️ No peer connection found for ${data.uuid} when setting remote description!`);
                         }
                         break;
                     case 'candidate':
-                        console.log(`📡 Received ICE candidate for ${data.name}`);
+                        console.log(`📡 Received ICE candidate for ${data.uuid}`);
 
-                        if (!peers[data.name]) {
-                            console.warn(`⚠️ No peer connection for ${data.name} yet, creating a placeholder.`);
-                            peers[data.name] = new RTCPeerConnection({
+                        if (!peers[data.uuid]) {
+                            console.warn(`⚠️ No peer connection for ${data.uuid} yet, creating a placeholder.`);
+                            peers[data.uuid] = new RTCPeerConnection({
                                 iceServers: [{ urls: 'stun:stun.l.google.com:19302' }]
                             });
-                            peers[data.name].queuedCandidates = [];
+                            peers[data.uuid].queuedCandidates = [];
                         }
 
-                        if (peers[data.name].remoteDescription) {
-                            console.log(`📡 Adding ICE candidate for ${data.name}`);
-                            await peers[data.name].addIceCandidate(new RTCIceCandidate(data.candidate));
+                        if (peers[data.uuid].remoteDescription) {
+                            console.log(`📡 Adding ICE candidate for ${data.uuid}`);
+                            await peers[data.uuid].addIceCandidate(new RTCIceCandidate(data.candidate));
                         } else {
-                            console.warn(`⚠️ Queuing ICE candidate for ${data.name} (remote description not set yet)`);
-                            peers[data.name].queuedCandidates.push(data.candidate);
+                            console.warn(`⚠️ Queuing ICE candidate for ${data.uuid} (remote description not set yet)`);
+                            peers[data.uuid].queuedCandidates.push(data.candidate);
                         }
                         break;
                     case 'leave':
-                        console.log(`🚪 Received leave message for ${data.name}`);
-
-                        if (!peers[data.name]) {
-                            console.warn(`⚠️ No peer connection found for ${data.name} at time of leave. Removing video anyway.`);
-                        }
-
-                        handleUserDisconnect(data.name); // ✅ Always call cleanup
+                        console.log(`🚪 Received leave message for ${data.uuid}`);
+                        handleUserDisconnect(data.uuid);
                         break;
                 }
             };
@@ -237,11 +234,11 @@
             ws.send(JSON.stringify({ type: 'answer', name, answer }));
         }
 
-        function addRemoteStream(stream, name) {
-            const videoId = `video-${name}`;
+        function addRemoteStream(stream, uuid) {
+            const videoId = `video-${uuid}`; // ✅ Use UUID for consistency
 
             if (document.getElementById(videoId)) {
-                console.warn(`⚠️ Duplicate video for ${name}. Skipping.`);
+                console.warn(`⚠️ Duplicate video for ${uuid}. Skipping.`);
                 return;
             }
 
@@ -250,8 +247,9 @@
             remoteVideo.autoplay = true;
             remoteVideo.id = videoId; // ✅ Ensure correct ID format
             document.getElementById('videos').appendChild(remoteVideo);
-            console.log(`📺 Added remote video for ${name}`);
+            console.log(`📺 Added remote video for ${uuid}`);
         }
+
 
         function toggleMute() {
             localStream.getAudioTracks().forEach(track => track.enabled = !track.enabled);
@@ -265,28 +263,35 @@
             document.getElementById('video-btn').textContent = isVideoStopped ? 'Start Video' : 'Stop Video';
         }
 
-        function handleUserDisconnect(name) {
-            console.log(`🚪 User ${name} disconnected`);
+        function handleUserDisconnect(uuid) {
+            console.log(`🚪 User ${uuid} disconnected`);
 
-            // ✅ Ensure the video ID is correctly formatted
-            const videoId = `video-${name}`;
+            // ✅ Ensure correct video ID
+            const videoId = `video-${uuid}`;
             const videoElement = document.getElementById(videoId);
 
             if (videoElement) {
                 videoElement.remove();
-                console.log(`🗑 Removed video for ${name}`);
+                console.log(`🗑 Removed video for ${uuid}`);
             } else {
-                console.warn(`⚠️ Video element for ${name} not found.`);
+                console.warn(`⚠️ Video element for ${uuid} not found.`);
             }
 
             // ✅ Ensure the peer connection exists before closing it
-            if (peers[name]) {
-                console.log(`🔌 Closing peer connection for ${name}`);
-                peers[name].close();
-                delete peers[name];
+            if (peers[uuid]) {
+                console.log(`🔌 Closing peer connection for ${uuid}`);
+                peers[uuid].close();
+                delete peers[uuid];
             } else {
-                console.warn(`⚠️ No peer connection found for ${name}, but video was removed.`);
+                console.warn(`⚠️ No peer connection found for ${uuid}, but video was removed.`);
             }
+        }
+
+        function generateUUID() {
+            return 'xxxx-xxxx-4xxx-yxxx-xxxxxx'.replace(/[xy]/g, function(c) {
+                const r = Math.random() * 16 | 0, v = c === 'x' ? r : (r & 0x3 | 0x8);
+                return v.toString(16);
+            });
         }
     </script>
 </body>

@@ -45,61 +45,46 @@ func main() {
 }
 
 func handleWebSocket(w http.ResponseWriter, r *http.Request) {
-	conn, err := upgrader.Upgrade(w, r, nil)
-	if err != nil {
-		log.Println("WebSocket upgrade error:", err)
-		return
-	}
-	defer conn.Close()
+    conn, err := upgrader.Upgrade(w, r, nil)
+    if err != nil {
+        log.Println("WebSocket upgrade error:", err)
+        return
+    }
+    defer conn.Close()
 
-	clients[conn] = "" // Initialize empty username
-	log.Println("✅ New user connected")
+    clients[conn] = "" // Initialize empty UUID
+    log.Println("✅ New user connected")
 
-	for {
-		_, message, err := conn.ReadMessage()
-		if err != nil {
-			log.Println("⚠️ User disconnected:", err)
+    for {
+        _, message, err := conn.ReadMessage()
+        if err != nil {
+            log.Println("⚠️ User disconnected:", err)
 
-			userName, exists := clients[conn] // Retrieve the correct username
-			if exists {
-				delete(clients, conn) // Remove user from map
-			}
+            userUUID := clients[conn] // Retrieve the correct UUID
+            if userUUID != "" {
+                delete(clients, conn) // Remove user from map
+            }
 
-			// Broadcast "leave" message with the correct user name
-			if userName != "" {
-				leaveMessage := Message{Type: "leave", Name: userName}
-				for client := range clients {
-					log.Println("👋 Broadcasting leave message for", userName)
-					client.WriteJSON(leaveMessage)
-				}
-			}
-			break
-		}
+            // Broadcast "leave" message with the correct UUID
+            leaveMessage := Message{Type: "leave", Name: userUUID}
+            for client := range clients {
+                log.Println("👋 Broadcasting leave message for", userUUID)
+                client.WriteJSON(leaveMessage)
+            }
+            break
+        }
 
-		var msg Message
-		if err := json.Unmarshal(message, &msg); err != nil {
-			log.Println("❌ JSON Unmarshal error:", err)
-			continue
-		}
+        var msg Message
+        if err := json.Unmarshal(message, &msg); err != nil {
+            log.Println("❌ JSON Unmarshal error:", err)
+            continue
+        }
 
-		// Store the username properly in the `clients` map
-		if msg.Type == "join" {
-			clients[conn] = msg.Name
-			log.Println("🆕 User joined:", msg.Name)
-		}
-
-		// Broadcast the message to all other clients
-		for client := range clients {
-			if client != conn {
-				err := client.WriteJSON(msg)
-				if err != nil {
-					log.Println("⚠️ WebSocket write error:", err)
-					client.Close()
-					delete(clients, client)
-				}
-			}
-		}
-	}
+        if msg.Type == "join" {
+            clients[conn] = msg.Name
+            log.Println("🆕 User joined with UUID:", msg.Name)
+        }
+    }
 }
 
 func createPeerConnection() (*webrtc.PeerConnection, error) {
