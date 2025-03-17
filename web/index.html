@@ -115,7 +115,7 @@
                             console.log(`✅ Remote description set for ${data.name}`);
 
                             if (peers[data.name].queuedCandidates && peers[data.name].queuedCandidates.length > 0) {
-                                console.log(`🚀 Applying ${peers[data.name].queuedCandidates.length} queued ICE candidates for ${data.name}`);
+                                console.log(`🚀 Applying queued ICE candidates for ${data.name}`);
                                 for (const candidate of peers[data.name].queuedCandidates) {
                                     await peers[data.name].addIceCandidate(new RTCIceCandidate(candidate));
                                 }
@@ -126,13 +126,20 @@
                         }
                         break;
                     case 'candidate':
-                        if (peers[data.name] && peers[data.name].remoteDescription) {
+                        console.log(`📡 Received ICE candidate for ${data.name}`);
+
+                        if (!peers[data.name]) {
+                            console.warn(`⚠️ No peer connection for ${data.name} yet, creating a placeholder.`);
+                            peers[data.name] = new RTCPeerConnection({
+                                iceServers: [{ urls: 'stun:stun.l.google.com:19302' }]
+                            });
+                            peers[data.name].queuedCandidates = [];
+                        }
+
+                        if (peers[data.name].remoteDescription) {
                             console.log(`📡 Adding ICE candidate for ${data.name}`);
                             await peers[data.name].addIceCandidate(new RTCIceCandidate(data.candidate));
                         } else {
-                            if (!peers[data.name]) {
-                                peers[data.name] = { queuedCandidates: [] };
-                            }
                             console.warn(`⚠️ Queuing ICE candidate for ${data.name} (remote description not set yet)`);
                             peers[data.name].queuedCandidates.push(data.candidate);
                         }
@@ -153,6 +160,7 @@
             });
 
             peers[name] = peerConnection; // ✅ Store the connection before doing anything
+            peers[name].queuedCandidates = []; // ✅ Ensure candidates can be queued
 
             localStream.getTracks().forEach(track => peerConnection.addTrack(track, localStream));
 
@@ -179,18 +187,15 @@
         async function createAnswer(name, offer) {
             console.log(`📡 Answering WebRTC Offer from ${name}`);
 
-            // ✅ Create a new PeerConnection
             const peerConnection = new RTCPeerConnection({
                 iceServers: [{ urls: 'stun:stun.l.google.com:19302' }]
             });
 
-            // ✅ Store the peer connection first
-            peers[name] = peerConnection;
+            peers[name] = peerConnection; // ✅ Store connection
+            peers[name].queuedCandidates = []; // ✅ Ensure candidates can be queued
 
-            // ✅ Add local media tracks (video & audio)
             localStream.getTracks().forEach(track => peerConnection.addTrack(track, localStream));
 
-            // ✅ Handle new ICE candidates
             peerConnection.onicecandidate = (event) => {
                 if (event.candidate) {
                     console.log(`📡 Sending ICE candidate for ${name}`);
@@ -198,21 +203,11 @@
                 }
             };
 
-            // ✅ Handle incoming media streams
             peerConnection.ontrack = (event) => {
                 console.log(`📺 Video stream received from ${name}`);
                 addRemoteStream(event.streams[0], name);
             };
 
-            // ✅ Handle connection state changes (Detect failures)
-            peerConnection.oniceconnectionstatechange = () => {
-                if (peerConnection.iceConnectionState === 'failed') {
-                    console.warn(`⚠️ ICE connection failed for ${name}, attempting restart`);
-                    peerConnection.restartIce(); // Restart ICE if failure detected
-                }
-            };
-
-            // ✅ Set the remote description (received offer)
             try {
                 await peerConnection.setRemoteDescription(new RTCSessionDescription(offer));
                 console.log(`✅ Remote offer set for ${name}`);
@@ -221,7 +216,6 @@
                 return;
             }
 
-            // ✅ Check and apply queued ICE candidates
             if (peers[name].queuedCandidates && peers[name].queuedCandidates.length > 0) {
                 console.log(`🚀 Applying queued ICE candidates for ${name}`);
                 for (const candidate of peers[name].queuedCandidates) {
@@ -230,17 +224,12 @@
                 peers[name].queuedCandidates = []; // Clear queue after applying
             }
 
-            // ✅ Create an answer and set local description
-            try {
-                const answer = await peerConnection.createAnswer();
-                await peerConnection.setLocalDescription(answer);
-                console.log(`✅ Answer created and local description set for ${name}`);
+            const answer = await peerConnection.createAnswer();
+            await peerConnection.setLocalDescription(answer);
 
-                // ✅ Send the answer back to the offerer
-                ws.send(JSON.stringify({ type: 'answer', name, answer }));
-            } catch (error) {
-                console.error(`❌ Error creating or setting answer: ${error}`);
-            }
+            console.log(`✅ Answer created and local description set for ${name}`);
+
+            ws.send(JSON.stringify({ type: 'answer', name, answer }));
         }
 
         function addRemoteStream(stream, name) {
