@@ -7,7 +7,6 @@ import (
 	"net/http"
 
 	"github.com/gorilla/websocket"
-	"github.com/pion/webrtc/v3"
 )
 
 var clients = make(map[*websocket.Conn]string)
@@ -100,29 +99,4 @@ func handleWebSocket(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
-}
-
-func createPeerConnection() (*webrtc.PeerConnection, error) {
-	// Define ICE servers
-	iceServers := []webrtc.ICEServer{
-		{
-			URLs: []string{"stun:stun.l.google.com:19302"},
-		},
-	}
-
-	// Create a new RTCPeerConnection
-	config := webrtc.Configuration{
-		ICEServers: iceServers,
-	}
-	peerConnection, err := webrtc.NewPeerConnection(config)
-	if err != nil {
-		return nil, err
-	}
-
-	// Handle ICE connection state changes
-	peerConnection.OnICEConnectionStateChange(func(state webrtc.ICEConnectionState) {
-		fmt.Printf("ICE Connection State has changed: %s\n", state.String())
-	})
-
-	return peerConnection, nil
 }
