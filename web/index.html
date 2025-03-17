@@ -146,7 +146,12 @@
                         break;
                     case 'leave':
                         console.log(`🚪 Received leave message for ${data.name}`);
-                        handleUserDisconnect(data.name);
+
+                        if (peers[data.name]) {
+                            handleUserDisconnect(data.name); // ✅ Call cleanup first
+                        } else {
+                            console.warn(`⚠️ No peer connection found for ${data.name}, skipping cleanup.`);
+                        }
                         break;
                 }
             };
@@ -233,7 +238,7 @@
         }
 
         function addRemoteStream(stream, name) {
-            const videoId = `video-${name}`; // Ensure consistent ID naming
+            const videoId = `video-${name}`;
 
             if (document.getElementById(videoId)) {
                 console.warn(`⚠️ Duplicate video for ${name}. Skipping.`);
@@ -243,7 +248,7 @@
             let remoteVideo = document.createElement('video');
             remoteVideo.srcObject = stream;
             remoteVideo.autoplay = true;
-            remoteVideo.id = videoId;
+            remoteVideo.id = videoId; // ✅ Ensure correct ID format
             document.getElementById('videos').appendChild(remoteVideo);
             console.log(`📺 Added remote video for ${name}`);
         }
@@ -263,8 +268,10 @@
         function handleUserDisconnect(name) {
             console.log(`🚪 User ${name} disconnected`);
 
-            // ✅ Remove video element if it exists
-            const videoElement = document.getElementById(`video-${name}`);
+            // ✅ Ensure correct video ID
+            const videoId = `video-${name}`;
+            const videoElement = document.getElementById(videoId);
+
             if (videoElement) {
                 videoElement.remove();
                 console.log(`🗑 Removed video for ${name}`);
@@ -272,7 +279,7 @@
                 console.warn(`⚠️ Video element for ${name} not found.`);
             }
 
-            // ✅ Close and delete the peer connection
+            // ✅ Ensure the peer connection exists before trying to close it
             if (peers[name]) {
                 console.log(`🔌 Closing peer connection for ${name}`);
                 peers[name].close();
@@ -281,8 +288,6 @@
                 console.warn(`⚠️ No peer connection found for ${name}.`);
             }
         }
-
-
     </script>
 </body>
 </html>
