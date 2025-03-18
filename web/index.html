@@ -94,7 +94,7 @@
             ];
             if (turnData && turnData.username && turnData.password) {
                 globalIceServers.push({
-                    urls: 'turn:noremac.dev:3478?transport=udp',
+                    urls: 'turns:noremac.dev:443?transport=tcp',
                     username: turnData.username,
                     credential: turnData.password
                 });
