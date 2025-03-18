@@ -20,7 +20,6 @@ var broadcast = make(chan Message)
 type Message struct {
 	Type      string      `json:"type"`
     UUID      string      `json:"uuid,omitempty"`
-	Name      string      `json:"name,omitempty"`
 	Offer     interface{} `json:"offer,omitempty"`
 	Answer    interface{} `json:"answer,omitempty"`
 	Candidate interface{} `json:"candidate,omitempty"`
@@ -65,7 +64,7 @@ func handleWebSocket(w http.ResponseWriter, r *http.Request) {
 	}
 	defer conn.Close()
 
-	clients[conn] = "" // Initialize empty username
+	clients[conn] = "" // Initialize empty userUUID
 	log.Println("✅ New user connected")
 
 	for {
@@ -73,16 +72,16 @@ func handleWebSocket(w http.ResponseWriter, r *http.Request) {
 		if err != nil {
 			log.Println("⚠️ User disconnected:", err)
 
-			userName, exists := clients[conn] // Retrieve the correct username
+			userUUID, exists := clients[conn] // Retrieve the correct userUUID
 			if exists {
 				delete(clients, conn) // Remove user from map
 			}
 
 			// Broadcast "leave" message with the correct user name
-			if userName != "" {
-				leaveMessage := Message{Type: "leave", Name: userName}
+			if userUUID != "" {
+				leaveMessage := Message{Type: "leave", UUID: userUUID}
 				for client := range clients {
-					log.Println("👋 Broadcasting leave message for", userName)
+					log.Println("👋 Broadcasting leave message for", userUUID)
 					client.WriteJSON(leaveMessage)
 				}
 			}
@@ -95,10 +94,10 @@ func handleWebSocket(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 
-		// Store the username properly in the `clients` map
+		// Store the userUUID properly in the `clients` map
 		if msg.Type == "join" {
-			clients[conn] = msg.Name
-			log.Println("🆕 User joined:", msg.Name)
+			clients[conn] = msg.UUID
+			log.Println("🆕 User joined:", msg.UUID)
 		}
 
 		// Broadcast the message to all other clients

@@ -108,8 +108,7 @@
                 // Notify server we joined
                 ws.send(JSON.stringify({ 
                     type: 'join', 
-                    uuid: myUUID, 
-                    name: myName 
+                    uuid: myUUID
                 }));
             };
             
@@ -191,14 +190,14 @@
             };
         }
 
-        async function createOffer(name) {
-            console.log(`📡 Sending WebRTC Offer to ${name}`);
+        async function createOffer(userUUID) {
+            console.log(`📡 Sending WebRTC Offer to ${userUUID}`);
 
             // Use a shared/global iceServers that you prepared after fetching ephemeral TURN creds
             const peerConnection = new RTCPeerConnection({ iceServers: globalIceServers });
 
-            peers[name] = peerConnection; 
-            peers[name].queuedCandidates = []; 
+            peers[userUUID] = peerConnection; 
+            peers[userUUID].queuedCandidates = []; 
 
             // Add local tracks to the PeerConnection
             localStream.getTracks().forEach(track => peerConnection.addTrack(track, localStream));
@@ -206,10 +205,10 @@
             // Listen for ICE candidates to send to the remote peer
             peerConnection.onicecandidate = (event) => {
                 if (event.candidate) {
-                    console.log(`📡 Sending ICE candidate for ${name}`);
+                    console.log(`📡 Sending ICE candidate for ${userUUID}`);
                     ws.send(JSON.stringify({ 
                         type: 'candidate', 
-                        name, 
+                        uuid: userUUID, 
                         candidate: event.candidate 
                     }));
                 }
@@ -217,28 +216,28 @@
 
             // When the remote peer adds a track, render the stream
             peerConnection.ontrack = (event) => {
-                console.log(`📺 Video stream received from ${name}`);
-                addRemoteStream(event.streams[0], name);
+                console.log(`📺 Video stream received from ${userUUID}`);
+                addRemoteStream(event.streams[0], userUUID);
             };
 
             // Create and set local offer
             const offer = await peerConnection.createOffer();
             await peerConnection.setLocalDescription(offer);
 
-            console.log(`✅ Offer created and local description set for ${name}`);
+            console.log(`✅ Offer created and local description set for ${userUUID}`);
 
             // Send the offer to the remote peer via WebSocket
-            ws.send(JSON.stringify({ type: 'offer', name, offer }));
+            ws.send(JSON.stringify({ type: 'offer', uuid: userUUID, offer }));
         }
 
-        async function createAnswer(name, offer) {
-            console.log(`📡 Answering WebRTC Offer from ${name}`);
+        async function createAnswer(userUUID, offer) {
+            console.log(`📡 Answering WebRTC Offer from ${userUUID}`);
 
             // Use the same ephemeral TURN credentials that were fetched and stored in globalIceServers
             const peerConnection = new RTCPeerConnection({ iceServers: globalIceServers });
 
-            peers[name] = peerConnection;
-            peers[name].queuedCandidates = [];
+            peers[userUUID] = peerConnection;
+            peers[userUUID].queuedCandidates = [];
 
             // Add local media tracks
             localStream.getTracks().forEach(track => peerConnection.addTrack(track, localStream));
@@ -246,10 +245,10 @@
             // Send ICE candidates to the remote peer
             peerConnection.onicecandidate = (event) => {
                 if (event.candidate) {
-                    console.log(`📡 Sending ICE candidate for ${name}`);
+                    console.log(`📡 Sending ICE candidate for ${userUUID}`);
                     ws.send(JSON.stringify({ 
                         type: 'candidate', 
-                        name, 
+                        uuid: userUUID, 
                         candidate: event.candidate 
                     }));
                 }
@@ -257,35 +256,35 @@
 
             // Handle incoming remote track
             peerConnection.ontrack = (event) => {
-                console.log(`📺 Video stream received from ${name}`);
-                addRemoteStream(event.streams[0], name);
+                console.log(`📺 Video stream received from ${userUUID}`);
+                addRemoteStream(event.streams[0], userUUID);
             };
 
             try {
                 // Set the remote offer
                 await peerConnection.setRemoteDescription(new RTCSessionDescription(offer));
-                console.log(`✅ Remote offer set for ${name}`);
+                console.log(`✅ Remote offer set for ${userUUID}`);
             } catch (error) {
                 console.error(`❌ Error setting remote description: ${error}`);
                 return;
             }
 
             // If we already have queued ICE candidates for this peer, apply them now
-            if (peers[name].queuedCandidates && peers[name].queuedCandidates.length > 0) {
-                console.log(`🚀 Applying queued ICE candidates for ${name}`);
-                for (const candidate of peers[name].queuedCandidates) {
-                    await peers[name].addIceCandidate(new RTCIceCandidate(candidate));
+            if (peers[userUUID].queuedCandidates && peers[userUUID].queuedCandidates.length > 0) {
+                console.log(`🚀 Applying queued ICE candidates for ${userUUID}`);
+                for (const candidate of peers[userUUID].queuedCandidates) {
+                    await peers[userUUID].addIceCandidate(new RTCIceCandidate(candidate));
                 }
-                peers[name].queuedCandidates = []; // Clear the queue after applying
+                peers[userUUID].queuedCandidates = []; // Clear the queue after applying
             }
 
             // Create and set our local answer
             const answer = await peerConnection.createAnswer();
             await peerConnection.setLocalDescription(answer);
-            console.log(`✅ Answer created and local description set for ${name}`);
+            console.log(`✅ Answer created and local description set for ${userUUID}`);
 
             // Send the answer back to the remote peer through the server
-            ws.send(JSON.stringify({ type: 'answer', name, answer }));
+            ws.send(JSON.stringify({ type: 'answer', uuid: userUUID, answer }));
         }
 
         function addRemoteStream(stream, uuid) {
