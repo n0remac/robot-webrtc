@@ -19,7 +19,7 @@ var broadcast = make(chan Message)
 
 type Message struct {
 	Type      string      `json:"type"`
-    UUID      string      `json:"uuid,omitempty"`
+	UUID      string      `json:"uuid,omitempty"`
 	Offer     interface{} `json:"offer,omitempty"`
 	Answer    interface{} `json:"answer,omitempty"`
 	Candidate interface{} `json:"candidate,omitempty"`
@@ -51,6 +51,10 @@ func main() {
 
 	// Handle the TURN credentials endpoint
 	http.HandleFunc("/turn-credentials", handleTurnCredentials)
+
+	http.HandleFunc("/GoGopherGo", func(w http.ResponseWriter, r *http.Request) {
+		http.ServeFile(w, r, "./web/GoGopherGo.html")
+	})
 
 	fmt.Printf("Starting server at http://localhost%s\n", webPort)
 	log.Fatal(http.ListenAndServe(webPort, nil))
