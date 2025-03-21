@@ -208,11 +208,11 @@ func GenerateStory() {
 </head>
 <body style="font-family: sans-serif;">
   <h1>Generating your book...</h1>
-  <!-- Instead of <pre>, we can use <div> to render separate HTML elements -->
   <div id="progressArea">Waiting for updates...</div>
-  
   <script>
-    let ws = new WebSocket("ws://" + window.location.host + "/story/ws?id=%s");
+    // Use wss:// if the page is loaded over HTTPS, otherwise use ws://
+    let protocol = window.location.protocol === "https:" ? "wss://" : "ws://";
+    let ws = new WebSocket(protocol + window.location.host + "/story/ws?id=%s");
     let progressEl = document.getElementById("progressArea");
 
     ws.onopen = function(event) {
@@ -221,23 +221,18 @@ func GenerateStory() {
 
     ws.onmessage = function(event) {
       let data = JSON.parse(event.data);
-      
       if (data.type === "progress") {
-        // Build separate elements for each line
-        // data.title, data.currentPage, data.totalPages
+        // Use separate elements so each line is on its own line
         let html = "<div>Title: " + data.title + "</div>" +
                    "<div>Generating page " + data.currentPage + " of " + data.totalPages + "</div>";
         progressEl.innerHTML = html;
-      } 
-      else if (data.type === "done") {
-        // Make final message clickable
-        let linkUrl = "http://" + window.location.host + "/" + data.bookHTML;
+      } else if (data.type === "done") {
+        let linkUrl = "https://" + window.location.host + "/" + data.bookHTML;
         let html = "<p>All pages generated!</p>" +
                    "<p>Open your new book here: <a href='" + linkUrl + "'>" + linkUrl + "</a></p>";
         progressEl.innerHTML = html;
         ws.close();
-      } 
-      else if (data.type === "error") {
+      } else if (data.type === "error") {
         progressEl.innerHTML = "<p style='color:red'>Error: " + data.error + "</p>";
         ws.close();
       }
