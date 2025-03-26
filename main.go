@@ -44,7 +44,7 @@ var upgrader = websocket.Upgrader{
 
 		// For local development, add local origins.
 		if os.Getenv("ENVIRONMENT") != "production" {
-			allowedOrigins = append(allowedOrigins, "http://localhost:3000", "http://127.0.0.1:3000")
+			allowedOrigins = append(allowedOrigins, "http://localhost:8080", "http://127.0.0.1:8080")
 		}
 
 		for _, allowed := range allowedOrigins {
@@ -69,6 +69,7 @@ func main() {
 	// Handle the TURN credentials endpoint
 	http.HandleFunc("/turn-credentials", handleTurnCredentials)
 
+	ShadowReddit()
 	GenerateStory()
 
 	fmt.Printf("Starting server at http://localhost%s\n", webPort)
