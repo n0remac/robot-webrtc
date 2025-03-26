@@ -386,7 +386,8 @@ func RedditSessionPage(prompt string, sessionID string) *Node {
 				),
 			),
 			Script(Raw(fmt.Sprintf(`
-	let ws = new WebSocket("ws://" + window.location.host + "/shadowreddit/ws?id=%s");
+	const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
+	let ws = new WebSocket("${protocol}://" + window.location.host + "/shadowreddit/ws?id=%s");
 	let responseArea = document.getElementById("responseArea");
 
 	ws.onmessage = function(event) {
