@@ -26,16 +26,13 @@ type Message struct {
 }
 
 // Define constants and variables
-const (
-	webPort = ":8080"
-)
 
 var (
 	coturnSecret = os.Getenv("TURN_PASS")
 	coturnTTL    = int64(3600)
 )
 
-func handleWebSocket(w http.ResponseWriter, r *http.Request) {
+func handleWebsocket(w http.ResponseWriter, r *http.Request) {
 	conn, err := upgrader.Upgrade(w, r, nil)
 	if err != nil {
 		log.Println("WebSocket upgrade error:", err)

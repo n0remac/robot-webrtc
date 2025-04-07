@@ -115,7 +115,7 @@ var createBookFn = openai.FunctionDefinition{
 // Main Entrypoint: GenerateStory()
 // ------------------------------------------------------
 
-func GenerateStory() {
+func GenerateStory(mux *http.ServeMux) {
 	apiKey := os.Getenv("OPENAI_API_KEY")
 	if apiKey == "" {
 		log.Fatal("OPENAI_API_KEY not set")
@@ -128,7 +128,7 @@ func GenerateStory() {
 	}
 
 	// GET /story -> prompt page
-	http.HandleFunc("/story", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/story", func(w http.ResponseWriter, r *http.Request) {
 		// Prepare random prompts
 		randomPrompts := []string{
 			"A curious Python exploring the magical land of code.",
@@ -194,7 +194,7 @@ func GenerateStory() {
 	})
 
 	// POST /story/generate -> create a new session & start generation
-	http.HandleFunc("/story/generate", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/story/generate", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
 			return
@@ -218,7 +218,7 @@ func GenerateStory() {
 	})
 
 	// GET /story/loading?id=XYZ -> the "loading" page with WebSocket progress
-	http.HandleFunc("/story/loading", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/story/loading", func(w http.ResponseWriter, r *http.Request) {
 		sessionID := r.URL.Query().Get("id")
 		if sessionID == "" {
 			http.Error(w, "Missing session ID", http.StatusBadRequest)
@@ -228,7 +228,7 @@ func GenerateStory() {
 	})
 
 	// GET /story/ws?id=XYZ -> WebSocket for progress updates
-	http.HandleFunc("/story/ws", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/story/ws", func(w http.ResponseWriter, r *http.Request) {
 		sessionID := r.URL.Query().Get("id")
 		if sessionID == "" {
 			http.Error(w, "Missing session ID", http.StatusBadRequest)
@@ -264,7 +264,7 @@ func GenerateStory() {
 	})
 
 	// GET /story/view?id=XYZ -> dynamic rendering from JSON
-	http.HandleFunc("/story/view", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/story/view", func(w http.ResponseWriter, r *http.Request) {
 		sessionID := r.URL.Query().Get("id")
 		if sessionID == "" {
 			http.Error(w, "Missing session ID", http.StatusBadRequest)
@@ -278,10 +278,10 @@ func GenerateStory() {
 	})
 
 	// Serve the static /books/... files (images, JSON, etc.)
-	http.Handle("/books/", http.StripPrefix("/books/", http.FileServer(http.Dir("books"))))
+	mux.Handle("/books/", http.StripPrefix("/books/", http.FileServer(http.Dir("books"))))
 
-	log.Println("[INFO] Listening on http://localhost:8080")
-	log.Fatal(http.ListenAndServe(":8080", nil))
+	// log.Println("[INFO] Listening on http://localhost:8080")
+	// log.Fatal(http.ListenAndServe(":8080", nil))
 }
 
 // ------------------------------------------------------

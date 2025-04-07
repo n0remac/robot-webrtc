@@ -9,6 +9,10 @@ import (
 	"github.com/gorilla/websocket"
 )
 
+const (
+	webPort = ":8081"
+)
+
 var upgrader = websocket.Upgrader{
 	CheckOrigin: func(r *http.Request) bool {
 		origin := r.Header.Get("Origin")
@@ -18,7 +22,7 @@ var upgrader = websocket.Upgrader{
 
 		// For local development, add local origins.
 		if os.Getenv("ENVIRONMENT") != "production" {
-			allowedOrigins = append(allowedOrigins, "http://localhost:8080", "http://127.0.0.1:8080")
+			allowedOrigins = append(allowedOrigins, "http://localhost" + webPort, "http://127.0.0.1" + webPort)
 		}
 
 		for _, allowed := range allowedOrigins {
@@ -35,17 +39,26 @@ var upgrader = websocket.Upgrader{
 func main() {
 	// Serve static files from the 'web' directory
 	fs := http.FileServer(http.Dir("./web"))
-	http.Handle("/video/", http.StripPrefix("/video/", fs))
+	mux := http.NewServeMux()
 
-	// Handle WebSockets separately
-	http.HandleFunc("/ws", handleWebSocket)
+	mux.Handle("/video/", http.StripPrefix("/video/", fs))
+
+	// Basic WebSocket handler
+	mux.HandleFunc("/ws", handleWebsocket)
+
+	// Newer Websocket code with command registry
+	websocketRegistry := NewCommandRegistry()
+	websocketHandler(websocketRegistry, mux)
 
 	// Handle the TURN credentials endpoint
-	http.HandleFunc("/turn-credentials", handleTurnCredentials)
+	mux.HandleFunc("/turn-credentials", handleTurnCredentials)
 
-	ShadowReddit()
-	GenerateStory()
+	mux.HandleFunc("/", ServeNode(HomePage(websocketRegistry)))
+
+	// Apps
+	ShadowReddit(mux)
+	GenerateStory(mux)
 
 	fmt.Printf("Starting server at http://localhost%s\n", webPort)
-	log.Fatal(http.ListenAndServe(webPort, nil))
+	log.Fatal(http.ListenAndServe(webPort, mux))
 }

@@ -18,6 +18,7 @@ var (
 	)
 	TailwindCSS = Script(Src("https://cdn.tailwindcss.com"))
 	HTMX        = Script(Src("https://unpkg.com/htmx.org@2.0.0/dist/htmx.min.js"))
+	HTMXExt     = Script(Src("https://unpkg.com/htmx.org@1.9.12/dist/ext/ws.js"))
 	Hyperscript = Script(Src("https://unpkg.com/hyperscript.org@0.9.13"))
 )
 
@@ -33,6 +34,7 @@ func DefaultLayout(n ...*Node) *Node {
 			Script(Src("https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4")),
 			//TailwindCSS,
 			HTMX,
+			HTMXExt,
 		),
 		Body(
 			Ch(n),

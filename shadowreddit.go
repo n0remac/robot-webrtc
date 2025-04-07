@@ -96,7 +96,7 @@ var (
 
 // ---------- MAIN + ROUTES ----------
 
-func ShadowReddit() {
+func ShadowReddit(mux *http.ServeMux) {
 	fmt.Println("Starting ShadowReddit...")
 	apiKey := os.Getenv("OPENAI_API_KEY")
 	if apiKey == "" {
@@ -104,10 +104,10 @@ func ShadowReddit() {
 	}
 	client := openai.NewClient(apiKey)
 
-	http.HandleFunc("/shadowreddit", ServeNode(RedditHomePage()))
-	http.HandleFunc("/shadowreddit/new", ServeNode(RedditPromptPage()))
+	mux.HandleFunc("/shadowreddit", ServeNode(RedditHomePage()))
+	mux.HandleFunc("/shadowreddit/new", ServeNode(RedditPromptPage()))
 
-	http.HandleFunc("/shadowreddit/start", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/shadowreddit/start", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != "POST" {
 			http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
 			return
@@ -201,7 +201,7 @@ func ShadowReddit() {
 		http.Redirect(w, r, "/shadowreddit/session?id="+session.ID, http.StatusSeeOther)
 	})
 
-	http.HandleFunc("/shadowreddit/session", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/shadowreddit/session", func(w http.ResponseWriter, r *http.Request) {
 		id := r.URL.Query().Get("id")
 		if id == "" {
 			http.Error(w, "Missing session ID", http.StatusBadRequest)
@@ -215,7 +215,7 @@ func ShadowReddit() {
 		ServeNode(RedditSessionPage(session.Prompt, session.ID))(w, r)
 	})
 
-	http.HandleFunc("/shadowreddit/ws", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/shadowreddit/ws", func(w http.ResponseWriter, r *http.Request) {
 		id := r.URL.Query().Get("id")
 		if id == "" {
 			http.Error(w, "Missing session ID", http.StatusBadRequest)
