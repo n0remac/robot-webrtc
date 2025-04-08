@@ -1,0 +1,25 @@
+.selectable-word {
+    margin: 0 2px;
+    transition: transform 0.2s ease, font-weight 0.2s ease;
+}
+.selectable-word.hovering {
+    transform: scale(1.1); /* slightly enlarged */
+}
+.selectable-word.selected {
+    transform: scale(1.2);
+    font-weight: bold;
+    margin: 0 6px;
+}
+.fading-out {
+    transition: opacity 1.5s ease;
+    opacity: 0;
+}
+.fading-in {
+    opacity: 0;
+    transition: opacity 2s ease;
+}
+.fading-in-active {
+    /* now we animate from opacity 0 -> 1 */
+    opacity: 1;
+    transition: opacity 2s ease;
+}

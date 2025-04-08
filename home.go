@@ -18,7 +18,7 @@ var (
 	selectedWords []string
 	wordsMutex    sync.Mutex
 	resetTimer    *time.Timer
-	waitTimeout   = 3 * time.Second
+	waitTimeout   = 5 * time.Second
 
 	contentRegistry   = make(map[string]string)
 	contentRegistryMu sync.Mutex
@@ -72,7 +72,7 @@ func HomePage(websocketRegistry *CommandRegistry) *Node {
 
 			hub.Broadcast <- WebsocketMessage{
 				Room:    id,
-				Content: []byte(newContentNode.Render()),
+				Content: []byte(fmt.Sprintf(`{"type":"newContent","html":%q}`, newContentNode.Render())),
 			}
 
 			selectedWords = []string{}
@@ -81,27 +81,10 @@ func HomePage(websocketRegistry *CommandRegistry) *Node {
 
 	return DefaultLayout(
 		Style(
-			Raw(`
-				.selectable-word {
-					margin: 0 2px;
-				}
-			`)),
+			Raw(loadFile("home.css"))),
 		Script(
-			Raw(`
-				document.addEventListener('htmx:wsConfigSend', function(evt) {
-					const clickedElt = evt.detail.elt;
-					const word = clickedElt.getAttribute('data-word');
-					if (word) {
-						evt.detail.parameters.selectedWord = word;
-					}
-
-					const currentContentElt = document.getElementById('content');
-					if (currentContentElt) {
-						const contentId = currentContentElt.getAttribute('data-content-id');
-						evt.detail.parameters.currentContentId = contentId;
-					}
-				});
-			`)),
+			Raw(loadFile("home.js")),
+		),
 		Attr("hx-ext", "ws"),
 		Attr("ws-connect", "/websocket?room="+id),
 		Div(Attrs(map[string]string{
@@ -268,4 +251,12 @@ func NodeForContent(content string) *Node {
 		Attr("data-content-id", contentID), // <-- key for the client to send back
 		WrapWordsInSpans(content),
 	)
+}
+
+func loadFile(filename string) string {
+	jsContent, err := os.ReadFile(filename)
+	if err != nil {
+		log.Fatalf("Error reading file: %s: %v", filename, err)
+	}
+	return string(jsContent)
 }
