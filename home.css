@@ -1,4 +1,5 @@
 .selectable-word {
+    display: inline-block;
     margin: 0 2px;
     transition: transform 0.2s ease, font-weight 0.2s ease;
 }
@@ -8,7 +9,7 @@
 .selectable-word.selected {
     transform: scale(1.2);
     font-weight: bold;
-    margin: 0 6px;
+    margin: 0 7px;
 }
 .fading-out {
     transition: opacity 1.5s ease;
@@ -22,4 +23,28 @@
     /* now we animate from opacity 0 -> 1 */
     opacity: 1;
     transition: opacity 2s ease;
+}
+
+.centered-container {
+    width: 80%;
+    max-width: 800px;
+    margin: 0 auto;           /* Center the container horizontally */
+    padding: 10px;            /* Optional padding */
+    box-sizing: border-box;   /* Include padding in the width */
+  }
+  .centered-container p {
+    text-align: left;
+    white-space: normal;      /* Allows the text to wrap naturally */
+    word-break: normal;       /* Prevents breaking words mid-letter */
+    margin-bottom: 1em;
+  }
+  .centered-container p span {
+    display: inline;          /* Ensures spans behave like normal text */
+  }
+  /* Insert a space after each span for proper break opportunities */
+  .centered-container p span::after {
+    content: " ";
+  }
+  .centered-container p span.selectable-word {
+    display: inline-block;
 }

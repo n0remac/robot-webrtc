@@ -1,0 +1,5 @@
+Underneath the surface, this app uses Go with a specialized GoDom DSL for server-side rendering. By pairing it with HTMX—especially the WebSocket extension—I can achieve a reactive, dynamic experience without juggling multiple frameworks or heavy client-side code.
+
+The HTMX WebSocket extension simplifies how the server and browser talk. When you click or hover on words, HTMX sends that data to the Go server, which interacts with OpenAI using function calling. The server then returns updated content that HTMX seamlessly swaps in, all in real time. For a project of this scale, server rendering remains efficient and easy to maintain.
+
+The elegance comes from keeping most logic in Go, a language I’m comfortable with, while letting HTMX handle UI events and partial updates. It means fewer moving parts—no separate front-end framework required—and a smoother integration of AI features.

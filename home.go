@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -96,13 +97,13 @@ func HomePage(websocketRegistry *CommandRegistry) *Node {
 				Class("max-w-4xl mx-auto p-8 text-center space-y-4"),
 				H1(Class("text-3xl font-bold"),
 					T("Welcome to My Portfolio Site")),
-				NodeForContent(
-					"Welcome to my interactive portfolio—a dynamic showcase where innovation meets creativity. "+
-						"Explore a curated collection of my personal projects, such as ShadowReddit, an immersive simulation of online community debates, "+
-						"and a Children's Book Generator that transforms simple ideas into imaginative stories. "+
-						"Engage with the content by clicking on individual words to trigger real-time, AI-driven narrative updates. "+
-						"Discover how technology and creativity combine to bring each project to life. Feel free to explore the links above to dive deeper into each app!",
-				),
+				NodeForContent(`
+This website is an interactive, ever-evolving platform where each piece of content can shift dynamically based on your interactions. You can click, tap, or even hover over individual words. If you hover for a couple of seconds, the word will become bold and cause the site to send a request to an AI model. If you wait a few more moments without selecting any words, the page’s text will fade out, and new content will appear.
+
+It’s all powered by the OpenAI API, which I’m using to dynamically generate or select new text. Because this is an experimental app, sometimes the AI responses may feel inconsistent or repetitive. That’s part of the fun—I’m continually tweaking the prompts and architecture to refine the experience.
+
+Please enjoy exploring, but keep in mind you’re using a “living” site. The words you click or hover on can guide the AI’s next output. Think of it as a conversation that unfolds in text form. Welcome, and have fun experimenting!
+				`),
 			),
 		),
 	)
@@ -121,36 +122,54 @@ func NavBar() *Node {
 	)
 }
 
+func NodeForContent(content string) *Node {
+	// Generate a new random ID (UUID)
+	contentID := uuid.NewString()
+
+	// Store the content in our global registry
+	contentRegistryMu.Lock()
+	contentRegistry[contentID] = content
+	contentRegistryMu.Unlock()
+
+	// Build the div that references the contentID
+	return Div(
+		Id("content"),
+		Class("centered-container"),
+		Attr("data-content-id", contentID), // <-- key for the client to send back
+		WrapWordsInSpans(content),
+	)
+}
+
 func WrapWordsInSpans(input string) *Node {
-	words := strings.Fields(input)
-	var spanNodes []*Node
+	lines := strings.Split(input, "\n")
+	var lineNodes []*Node
 
-	for _, w := range words {
-		span := Span(
-			Class("selectable-word"),
-			Attr("hx-ext", "ws"),
-			Attr("ws-send", "click"),
-			Attr("data-word", w),
-			T(w),
+	for _, line := range lines {
+		words := strings.Fields(line)
+		var spanNodes []*Node
+
+		for _, w := range words {
+			span := Span(
+				Class("selectable-word"),
+				Attr("hx-ext", "ws"),
+				Attr("ws-send", "click"),
+				Attr("data-word", w),
+				T(w),
+			)
+
+			spanNodes = append(spanNodes, span)
+		}
+
+		lineNode := P(
+			Ch(spanNodes),
 		)
-
-		spanNodes = append(spanNodes, span)
+		lineNodes = append(lineNodes, lineNode)
 	}
 
-	container := Div(
-		Class("wrapped-text flex flex-wrap gap-1"),
-		Ch(spanNodes),
-	)
-	return container
+	return Ch(lineNodes)
 }
 
-var AllContent = []string{
-	"Exploring Minimalism: In this blog post, I share insights on simplifying life and finding joy in less. Embrace minimalism and discover what truly matters.",
-	"Tech Trends 2025: The future of technology is now. This post dives into emerging trends—from AI innovations to sustainable tech solutions.",
-	"Travel Tales: Journey through hidden gems across the globe. Learn how adventure transforms life and sparks creativity.",
-	"Healthy Living: Discover practical tips for a balanced lifestyle. Nutrition, exercise, and mindfulness come together for a healthier you.",
-	"Creative Writing: Unleash your inner storyteller. This post offers inspiration and techniques to kickstart your writing journey.",
-}
+var AllContent = loadAllContent("content")
 
 // ContentSelectionResponse represents the structure of the function call response.
 type ContentSelectionResponse struct {
@@ -236,27 +255,41 @@ Here is the full list of allowed content (excluding the current content):
 	return parsed.Content, nil
 }
 
-func NodeForContent(content string) *Node {
-	// Generate a new random ID (UUID)
-	contentID := uuid.NewString()
-
-	// Store the content in our global registry
-	contentRegistryMu.Lock()
-	contentRegistry[contentID] = content
-	contentRegistryMu.Unlock()
-
-	// Build the div that references the contentID
-	return Div(
-		Id("content"),
-		Attr("data-content-id", contentID), // <-- key for the client to send back
-		WrapWordsInSpans(content),
-	)
-}
-
 func loadFile(filename string) string {
 	jsContent, err := os.ReadFile(filename)
 	if err != nil {
 		log.Fatalf("Error reading file: %s: %v", filename, err)
 	}
 	return string(jsContent)
+}
+
+func loadAllContent(dirPath string) []string {
+	var contentList []string
+
+	// Read the directory entries
+	files, err := os.ReadDir(dirPath)
+	if err != nil {
+		log.Fatalf("Error reading content directory: %v", err)
+	}
+
+	for _, file := range files {
+		if file.IsDir() {
+			// Skip directories, or recursively scan if desired
+			continue
+		}
+		// Construct full path
+		fullPath := filepath.Join(dirPath, file.Name())
+
+		data, err := os.ReadFile(fullPath)
+		if err != nil {
+			log.Printf("Warning: failed to read file %s: %v", fullPath, err)
+			continue
+		}
+		// Convert the file’s data to a string, trim, and add to the slice
+		contentStr := strings.TrimSpace(string(data))
+		if len(contentStr) > 0 {
+			contentList = append(contentList, contentStr)
+		}
+	}
+	return contentList
 }

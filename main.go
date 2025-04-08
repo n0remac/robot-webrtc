@@ -10,7 +10,7 @@ import (
 )
 
 const (
-	webPort = ":8080"
+	webPort = ":8081"
 )
 
 var upgrader = websocket.Upgrader{
