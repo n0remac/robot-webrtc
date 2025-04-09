@@ -1,0 +1,11 @@
+Lately, I’ve been exploring how AI might evolve beyond just tools or services—and instead become embedded agents in a decentralized, peer-to-peer social system. Imagine a world where your data doesn’t live on a company’s server but is distributed across personal devices, encrypted, and relayed like packets in a global, self-healing mesh. A world where your interactions with others don’t pass through a platform, but are routed and filtered by the AIs you trust—your own.
+
+In this future, every person has a local LLM—an intelligent layer that filters, stores, interprets, and even responds on your behalf. You control it. It learns from your data, your rhythm, your emotional tone. But it doesn’t exist in isolation.
+
+Around you, shared or emergent LLMs begin to form. Some are local—representing a city, a neighborhood, a subculture. Others are global, trained on permissioned or public content from many nodes. You decide how much to interact with these emergent intelligences. You might query the local arts LLM for nearby shows, contribute memes to a collective humor agent, or fork a regional model to tune it for your values.
+
+This isn’t just decentralized storage. It’s decentralized intelligence. Each device can act as a relay, a host, a thinker. Data can live near where it’s relevant—redundantly and securely—spreading like culture does. Popular content (memes, moments, declarations) could propagate based on emergent memetic weight, not global algorithmic force.
+
+And yes, the site you’re on now is still just a simple preview. It’s not peer-to-peer yet, but it's moving in that direction. A site that responds to your touch, rewrites itself as you explore, and evolves based on your rhythms. That’s the spirit I want to carry forward—not just for one site, but for how we might inhabit the web itself.
+
+We don't need one AI to rule them all. We need many, shaped by us, in constant conversation.
