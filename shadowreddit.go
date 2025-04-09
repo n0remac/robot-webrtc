@@ -97,7 +97,6 @@ var (
 // ---------- MAIN + ROUTES ----------
 
 func ShadowReddit(mux *http.ServeMux) {
-	fmt.Println("Starting ShadowReddit...")
 	apiKey := os.Getenv("OPENAI_API_KEY")
 	if apiKey == "" {
 		log.Fatal("OPENAI_API_KEY not set")
@@ -252,7 +251,6 @@ func ShadowReddit(mux *http.ServeMux) {
 			for lastSentTopLevel < len(sess.Responses) {
 				comment := sess.Responses[lastSentTopLevel]
 				html := RenderCommentRecursive(comment, 0).Render()
-				fmt.Println("Rendering comment:", html)
 				conn.WriteJSON(map[string]string{
 					"type":        "comment",
 					"parentIndex": fmt.Sprintf("%d", lastSentTopLevel),
@@ -583,7 +581,6 @@ Your response should sound like a typical Reddit user with that viewpoint.
 }
 
 func GenerateReplyToComment(client *openai.Client, originalPost, parentComment string) (string, error) {
-	fmt.Println("Generating reply to comment")
 	systemMsg := openai.ChatCompletionMessage{
 		Role: openai.ChatMessageRoleSystem,
 		Content: `You are simulating a reply in a Reddit thread. 
