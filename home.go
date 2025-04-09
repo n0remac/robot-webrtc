@@ -94,9 +94,12 @@ func HomePage(websocketRegistry *CommandRegistry) *Node {
 		}),
 			NavBar(),
 			Div(
+				Class("navigation-buttons flex justify-center space-x-4 mt-4"),
+				Button(Id("back-button"), Class("btn btn-sm"), T("Back")),
+				Button(Id("forward-button"), Class("btn btn-sm"), T("Forward")),
+			),
+			Div(
 				Class("max-w-4xl mx-auto p-8 text-center space-y-4"),
-				H1(Class("text-3xl font-bold"),
-					T("Welcome to My Portfolio Site")),
 				NodeForContent(`
 This website is an interactive, ever-evolving platform where each piece of content can shift dynamically based on your interactions. You can click, tap, or even hover over individual words. If you hover for a couple of seconds, the word will become bold and cause the site to send a request to an AI model. If you wait a few more moments without selecting any words, the page’s text will fade out, and new content will appear.
 
