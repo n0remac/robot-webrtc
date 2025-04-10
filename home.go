@@ -5,8 +5,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"net/http"
 	"os"
-	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -24,6 +24,11 @@ var (
 	contentRegistry   = make(map[string]string)
 	contentRegistryMu sync.Mutex
 )
+
+func Home(mux *http.ServeMux, websocketRegistry *CommandRegistry) {
+	processContent()
+	mux.HandleFunc("/", ServeNode(HomePage(websocketRegistry)))
+}
 
 func HomePage(websocketRegistry *CommandRegistry) *Node {
 	id := "home"
@@ -61,8 +66,18 @@ func HomePage(websocketRegistry *CommandRegistry) *Node {
 				contentRegistryMu.Unlock()
 			}
 
+			allProcessedContent := loadProcessedContent("processed_content.json")
+			currentContentFilename := ""
+			for _, content := range allProcessedContent {
+				if content.Content == currentContent {
+					currentContentFilename = content.Filename
+					break
+				}
+			}
+
 			// Generate new content excluding the current content
-			newContent, err := selectContent(client, contextPrompt, currentContent)
+			//newContent, err := selectContent(client, contextPrompt, currentContent)
+			newContent, err := selectContentByKeywords(client, contextPrompt, currentContentFilename, allProcessedContent)
 			if err != nil {
 				log.Printf("Error selecting content: %v", err)
 				return
@@ -172,58 +187,88 @@ func WrapWordsInSpans(input string) *Node {
 	return Ch(lineNodes)
 }
 
-var AllContent = loadAllContent("content")
-
 // ContentSelectionResponse represents the structure of the function call response.
 type ContentSelectionResponse struct {
 	Content string `json:"content"`
 }
 
-func selectContent(client *openai.Client, contextPrompt string, currentContent string) (string, error) {
-	// Filter out the current content from the allowed content.
-	var allowedContent []string
-	for _, content := range AllContent {
-		if strings.TrimSpace(content) != strings.TrimSpace(currentContent) {
-			allowedContent = append(allowedContent, content)
+func loadFile(filename string) string {
+	jsContent, err := os.ReadFile(filename)
+	if err != nil {
+		log.Fatalf("Error reading file: %s: %v", filename, err)
+	}
+	return string(jsContent)
+}
+
+func loadProcessedContent(filename string) []ContentWithKeywords {
+	data, err := os.ReadFile(filename)
+	if err != nil {
+		log.Fatalf("Error reading processed content file: %v", err)
+	}
+	var contentList []ContentWithKeywords
+	if err := json.Unmarshal(data, &contentList); err != nil {
+		log.Fatalf("Error unmarshaling processed content file: %v", err)
+	}
+	return contentList
+}
+
+type KeywordsSelectionResponse struct {
+	Filename string `json:"filename"`
+}
+
+func selectContentByKeywords(client *openai.Client, contextPrompt string, currentFilename string, processed []ContentWithKeywords) (string, error) {
+	// Remove the current content from the allowed candidates.
+	var candidates []ContentWithKeywords
+	for _, cw := range processed {
+		if strings.TrimSpace(cw.Filename) != strings.TrimSpace(currentFilename) {
+			candidates = append(candidates, cw)
 		}
 	}
-	if len(allowedContent) == 0 {
+	if len(candidates) == 0 {
 		return "", fmt.Errorf("no allowed content available after excluding current content")
 	}
 
-	// Marshal the allowedContent to JSON so it can be passed to GPT.
-	allowedContentJSON, err := json.Marshal(allowedContent)
-	if err != nil {
-		return "", fmt.Errorf("failed to marshal allowed content: %w", err)
+	// Build a candidate list string of the form:
+	// filename1: keyword1, keyword2, …
+	// filename2: keywordA, keywordB, …
+	var candidateLines []string
+	for _, candidate := range candidates {
+		keywordsStr := strings.Join(candidate.Keywords, ", ")
+		line := fmt.Sprintf("%s: %s", candidate.Filename, keywordsStr)
+		candidateLines = append(candidateLines, line)
 	}
+	candidatesStr := strings.Join(candidateLines, "\n")
+
+	// Construct the user prompt.
+	userMsgStr := fmt.Sprintf(`Based on the context words, choose a filename from the following list that best matches the context.
+
+Candidates:
+%s`, candidatesStr)
 
 	// Define the system prompt.
 	systemPrompt := openai.ChatCompletionMessage{
 		Role:    openai.ChatMessageRoleSystem,
-		Content: "You are helping to select a single piece of content from a list of predefined options. Choose the one that best fits the context provided. Use only the content provided in the list; do not invent new content.",
+		Content: "You are an assistant that selects content based on keywords. Given the context and a candidate list with filenames and their associated keywords, return only the filename of the content that best fits the provided context.",
 	}
 
-	// Build the user message with the context and full list (excluding the current content).
+	// Build the user message that includes the context and candidate list.
 	userMessage := openai.ChatCompletionMessage{
-		Role: openai.ChatMessageRoleUser,
-		Content: fmt.Sprintf(`Context: %s
-
-Here is the full list of allowed content (excluding the current content):
-%s`, contextPrompt, string(allowedContentJSON)),
+		Role:    openai.ChatMessageRoleUser,
+		Content: fmt.Sprintf("Context: %s\n\n%s", contextPrompt, userMsgStr),
 	}
 
-	// Define the function for selecting a single piece of content.
+	// Define the function for selecting content by keywords.
 	fn := openai.FunctionDefinition{
-		Name:        "select_content",
-		Description: "Select a single piece of content from a list of predefined options.",
+		Name:        "select_content_by_keywords",
+		Description: "Select a filename from a list of candidates based on keywords and context.",
 		Parameters: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
-				"content": map[string]any{
+				"filename": map[string]any{
 					"type": "string",
 				},
 			},
-			"required": []string{"content"},
+			"required": []string{"filename"},
 		},
 	}
 
@@ -235,7 +280,7 @@ Here is the full list of allowed content (excluding the current content):
 			userMessage,
 		},
 		Functions:    []openai.FunctionDefinition{fn},
-		FunctionCall: openai.FunctionCall{Name: "select_content"},
+		FunctionCall: openai.FunctionCall{Name: "select_content_by_keywords"},
 	}
 
 	chatResp, err := client.CreateChatCompletion(context.Background(), chatRequest)
@@ -249,50 +294,18 @@ Here is the full list of allowed content (excluding the current content):
 	}
 
 	// Parse the function call arguments.
-	var parsed ContentSelectionResponse
+	var parsed KeywordsSelectionResponse
 	err = json.Unmarshal([]byte(choice.Message.FunctionCall.Arguments), &parsed)
 	if err != nil {
 		return "", fmt.Errorf("failed to unmarshal function response: %w", err)
 	}
 
-	return parsed.Content, nil
-}
-
-func loadFile(filename string) string {
-	jsContent, err := os.ReadFile(filename)
-	if err != nil {
-		log.Fatalf("Error reading file: %s: %v", filename, err)
-	}
-	return string(jsContent)
-}
-
-func loadAllContent(dirPath string) []string {
-	var contentList []string
-
-	// Read the directory entries
-	files, err := os.ReadDir(dirPath)
-	if err != nil {
-		log.Fatalf("Error reading content directory: %v", err)
-	}
-
-	for _, file := range files {
-		if file.IsDir() {
-			// Skip directories, or recursively scan if desired
-			continue
-		}
-		// Construct full path
-		fullPath := filepath.Join(dirPath, file.Name())
-
-		data, err := os.ReadFile(fullPath)
-		if err != nil {
-			log.Printf("Warning: failed to read file %s: %v", fullPath, err)
-			continue
-		}
-		// Convert the file’s data to a string, trim, and add to the slice
-		contentStr := strings.TrimSpace(string(data))
-		if len(contentStr) > 0 {
-			contentList = append(contentList, contentStr)
+	// Search through the processed content slice for the filename.
+	for _, candidate := range processed {
+		if candidate.Filename == parsed.Filename {
+			return candidate.Content, nil
 		}
 	}
-	return contentList
+
+	return "", fmt.Errorf("filename %s not found among candidates", parsed.Filename)
 }

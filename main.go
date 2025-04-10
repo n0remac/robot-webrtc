@@ -22,7 +22,7 @@ var upgrader = websocket.Upgrader{
 
 		// For local development, add local origins.
 		if os.Getenv("ENVIRONMENT") != "production" {
-			allowedOrigins = append(allowedOrigins, "http://localhost" + webPort, "http://127.0.0.1" + webPort)
+			allowedOrigins = append(allowedOrigins, "http://localhost"+webPort, "http://127.0.0.1"+webPort)
 		}
 
 		for _, allowed := range allowedOrigins {
@@ -53,9 +53,8 @@ func main() {
 	// Handle the TURN credentials endpoint
 	mux.HandleFunc("/turn-credentials", handleTurnCredentials)
 
-	mux.HandleFunc("/", ServeNode(HomePage(websocketRegistry)))
-
 	// Apps
+	Home(mux, websocketRegistry)
 	ShadowReddit(mux)
 	GenerateStory(mux)
 
