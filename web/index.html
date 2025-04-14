@@ -107,7 +107,7 @@
             if (turnData && turnData.username && turnData.password) {
                 // TURN over UDP (fast, but might be blocked)
                 globalIceServers.push({
-                    urls: 'turn:noremac.dev:443?transport=udp',
+                    urls: 'turn:noremac.dev:3478?transport=udp',
                     username: turnData.username,
                     credential: turnData.password
                 });
@@ -274,7 +274,7 @@
 
         function wireUpPeer(pc, uuid) {
             if (pc._tracksAdded) return;
-            
+
             // tracks
             pc.ontrack = (e) => addRemoteStream(e.streams[0], uuid);
             // local ICE → signalling
