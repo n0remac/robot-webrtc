@@ -107,7 +107,7 @@
             if (turnData && turnData.username && turnData.password) {
                 // TURN over UDP (fast, but might be blocked)
                 globalIceServers.push({
-                    urls: 'turn:noremac.dev:3478?transport=udp',
+                    urls: 'turn:turn.noremac.dev:3478?transport=udp',
                     username: turnData.username,
                     credential: turnData.password
                 });
