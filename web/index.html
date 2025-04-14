@@ -45,31 +45,86 @@
         </div>
     </div>
     <script>
+        const domainName = window.location.hostname === "localhost" ? "localhost:8080" : "noremac.dev";
+        const wsProtocol = window.location.protocol === "https:" ? "wss" : "ws";
+
+        const Logger = (() => {
+            let enabled = false;              // controlled by server
+            let wsLog   = null;               // second websocket for log shipping
+            let seq     = 0;                  // monotonic counter
+            let backlog = [];
+
+            function setDebug(value) { enabled = value; }
+
+            function attachSocket(url) {
+                wsLog = new WebSocket(url);
+                wsLog.onerror = e => console.warn('[log‑socket] error', e);
+
+                /* flush once open */
+                wsLog.onopen = () => {
+                    enabled = true;
+                    backlog.forEach(e => wsLog.send(JSON.stringify(e)));
+                    backlog = [];
+                };
+            }
+
+            /** core log fn: level, msg, ...meta */
+            function log(level, msg, ...meta) {
+                if (!enabled) return;
+
+                const entry = {
+                    t: performance.now().toFixed(1),   // high‑res timestamp
+                    s: ++seq,                          // sequence number
+                    lvl: level,
+                    msg,
+                    meta,
+                };
+
+                // 1) Browser console (colour by level)
+                const colour = {INFO:'', WARN:'orange', ERR:'red'}[level] ?? '';
+                console.log(`%c${entry.t}ms #${entry.s} ${level}: ${msg}`,
+                            `color:${colour}`, ...meta);
+
+                // 2) Backend (fire‑and‑forget)
+                if (wsLog?.readyState === WebSocket.OPEN){
+                    wsLog.send(JSON.stringify(entry));
+                } else {
+                    backlog.push(entry);
+                }
+            }
+
+            return {
+                setDebug,
+                attachSocket,
+                info : (...a)=>log('INFO', ...a),
+                warn : (...a)=>log('WARN', ...a),
+                error: (...a)=>log('ERR' , ...a),
+            };
+            })();
+        
+        Logger.attachSocket(`${wsProtocol}://${domainName}/logs`);
+
         document.getElementById('join-btn').addEventListener('click', joinSession);
         document.getElementById('mute-btn').addEventListener('click', toggleMute);
         document.getElementById('video-btn').addEventListener('click', toggleVideo);
 
         let myUUID = null;
 
-        window.addEventListener('beforeunload', () => {
-            if (ws && ws.readyState === WebSocket.OPEN) {
-                ws.send(JSON.stringify({ type:'leave', uuid: myUUID }));
-            }
-        });
-
         let localStream;
         let peers = {};
         let ws;
-
         const pendingCandidates = {};
-
         let isMuted = false;
         let isVideoStopped = false;
-
         let myName;
-
         let globalIceServers = [];
 
+        window.addEventListener('beforeunload', () => {
+            if (ws && ws.readyState === WebSocket.OPEN) {
+                ws.send(JSON.stringify({ type:'leave', uuid: myUUID }));
+                Logger.info('sent leave on unload', {uuid: myUUID});
+            }
+        });
 
         async function joinSession() {
             // 1) Get the user name
@@ -80,22 +135,25 @@
             }
             myUUID = generateUUID();
 
+            Logger.info('join click', {uuid: myUUID, name: myName});
+
             // 2) Hide the join screen, show participant view
             document.getElementById('join-screen').style.display = 'none';
             document.getElementById('participant-view').style.display = 'block';
 
             // 3) Fetch ephemeral TURN credentials from your backend
             let turnData = null;
+            const tFetchStart = performance.now();
             try {
                 const response = await fetch('/turn-credentials');
                 if (response.ok) {
                     turnData = await response.json(); 
-                    console.log('Fetched TURN credentials:', turnData);
+                    Logger.info('TURN creds fetched', {ms: (performance.now()-tFetchStart)|0});
                 } else {
-                    console.error('Failed to fetch TURN credentials');
+                    Logger.warn('TURN fetch failed', {status: response.status});
                 }
             } catch (err) {
-                console.error('Error fetching TURN credentials:', err);
+                Logger.error('TURN fetch threw', err);
             }
 
             // 4) Build the iceServers array
@@ -120,59 +178,70 @@
                 });
             }
 
+            Logger.info('ICE list built', {count: globalIceServers.length});
+
             // 5) Open WebSocket connection
-            ws = new WebSocket(`wss://noremac.dev/ws`);
+            ws = new WebSocket(`${wsProtocol}://${domainName}/ws`);
 
             ws.onopen = () => {
-                console.log('✅ WebSocket connection opened');
+                Logger.info('WS open');
                 // Notify server we joined
                 ws.send(JSON.stringify({ 
                     type: 'join', 
                     uuid: myUUID
                 }));
+                Logger.info('sent join', {uuid: myUUID});
             };
             
-            ws.onerror = (error) => {
-                console.error('❌ WebSocket Error:', error);
-            };
-            
-            ws.onclose = () => {
-                console.warn('⚠️ WebSocket connection closed');
-            };
+            ws.onerror = e => Logger.error('WS error', e);
+            ws.onclose = e => Logger.warn('WS closed', {code:e.code, reason:e.reason});
 
             // 6) Get local media (camera/mic)
-            localStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+            Logger.info('getUserMedia start');
+            const gUMstart = performance.now();
+            try {
+                localStream = await navigator.mediaDevices.getUserMedia({video:true,audio:true});
+                Logger.info('gUM ok', {ms: (performance.now()-gUMstart)|0});
+            } catch (err) {
+                Logger.error('gUM failed', err);
+                return;   // can’t continue without media
+            }
 
             // 7) Show local video
-            const localVideo = document.createElement('video');
-            localVideo.srcObject = localStream;
-            localVideo.autoplay = true;
-            localVideo.playsInline = true;
-            localVideo.muted = true;
+            const localVideo = Object.assign(document.createElement('video'), {
+                srcObject: localStream, autoplay:true, playsInline:true, muted:true
+            });
             document.getElementById('videos').appendChild(localVideo);
+            Logger.info('local video element added');
 
             // 8) Listen for messages from other peers (via the server)
             ws.onmessage = async (message) => {
                 const data = JSON.parse(message.data);
-                console.log('📩 WebSocket received:', data);
+                if (data.type === 'debug') {           // server → client toggle
+                    Logger.setDebug(!!data.enable);
+                    Logger.info('debug flag set', {enable: data.enable});
+                    return;
+                }
+
+                Logger.info('WS msg', data);
 
                 switch (data.type) {
                     case 'join':
                         if (data.uuid !== myUUID) {
-                            console.log(`📡 Creating offer for ${data.uuid}`);
+                            Logger.info('creating offer', {to:data.uuid});
                             await createOffer(data.uuid);
                         }
                         break;
 
                     case 'offer':
-                        console.log(`📡 Received offer from ${data.uuid}`);
+                        Logger.info('offer recv', {from:data.uuid});
                         await createAnswer(data.uuid, data.offer);
                         break;
 
                     case 'answer':
                         if (peers[data.uuid]) {
                             await peers[data.uuid].setRemoteDescription(new RTCSessionDescription(data.answer));
-                            console.log(`✅ Remote description set for ${data.uuid}`);
+                            Logger.info('remote SDP set', {peer:data.uuid});
 
                             // If we had queued candidates before remote description was set, apply them now
                             if (peers[data.uuid].queuedCandidates && peers[data.uuid].queuedCandidates.length > 0) {
@@ -182,12 +251,12 @@
                                 peers[data.uuid].queuedCandidates = [];
                             }
                         } else {
-                            console.warn(`⚠️ No peer connection found for ${data.uuid} when setting remote description!`);
+                            Logger.warn('answer for unknown peer', {peer:data.uuid});
                         }
                         break;
                     
                     case 'candidate':
-                        console.log(`📡 Received ICE candidate for ${data.uuid}`);
+                        Logger.info('candidate recv', {from:data.uuid});
                         if (!peers[data.uuid]) {
                             // no PC yet – just queue it
                             (pendingCandidates[data.uuid] ||= []).push(data.candidate);
@@ -202,20 +271,21 @@
                         break;
 
                     case 'leave':
-                        console.log(`🚪 Received leave message for ${data.uuid}`);
+                        Logger.info('leave recv', {peer:data.uuid});
                         handleUserDisconnect(data.uuid);
                         break;
                 }
             };
         }
         async function createOffer(userUUID) {
-            console.log(`📡 Creating WebRTC offer for ${userUUID}`);
+            Logger.info('offer:start', {to: userUUID});
 
             // 1  Get (or reuse) the RTCPeerConnection
             let pc = peers[userUUID];
             if (!pc) {
                 pc = peers[userUUID] = new RTCPeerConnection({ iceServers: globalIceServers });
                 wireUpPeer(pc, userUUID);          // attaches tracks & event handlers once
+                Logger.info('offer:new‑pc', {to: userUUID});
             }
 
             // 2  Apply any ICE candidates that arrived before the PC existed
@@ -223,36 +293,50 @@
                 for (const c of pendingCandidates[userUUID]) {
                     await pc.addIceCandidate(new RTCIceCandidate(c));
                 }
+                Logger.info('offer:pre‑pc‑cands', {to: userUUID, count: pendingCandidates[userUUID].length});
                 delete pendingCandidates[userUUID];
             }
 
             // 3  Create the SDP offer, set it locally, then signal it
+            const t0 = performance.now();
             const offer = await pc.createOffer();
             await pc.setLocalDescription(offer);
 
-            console.log(`✅ Offer created and local description set for ${userUUID}`);
+            Logger.info('offer:local‑desc', {
+                to: userUUID,
+                ms: (performance.now() - t0)|0,
+                sdpBytes: offer.sdp.length
+            });
             ws.send(JSON.stringify({ type: 'offer', uuid: userUUID, offer }));
+            Logger.info('offer:sent', {to: userUUID});
         }
 
         async function createAnswer(userUUID, offer) {
-            console.log(`📡 Answering WebRTC offer from ${userUUID}`);
+            Logger.info('answer:start', {from: userUUID});
 
             // 1. Get (or build) the peer‑connection
             let pc = peers[userUUID];
             if (!pc) {
                 pc = peers[userUUID] = new RTCPeerConnection({ iceServers: globalIceServers });
                 wireUpPeer(pc, userUUID);               // attaches tracks & handlers
+                Logger.info('answer:new‑pc', {from: userUUID});
             }
 
             // 2. Apply the remote offer
+            const tSet = performance.now();
             await pc.setRemoteDescription(new RTCSessionDescription(offer));
-            console.log(`✅ Remote description set for ${userUUID}`);
+            Logger.info('answer:remote‑desc', {
+                from: userUUID,
+                ms: (performance.now() - tSet)|0,
+                sdpBytes: offer.sdp.length
+            });
 
             // 3. Flush any ICE candidates that arrived before we had a PC
             if (pendingCandidates[userUUID]) {
                 for (const c of pendingCandidates[userUUID]) {
                     await pc.addIceCandidate(new RTCIceCandidate(c));
                 }
+                Logger.info('answer:pre‑pc‑cands', {from: userUUID, count: pendingCandidates[userUUID].length});
                 delete pendingCandidates[userUUID];
             }
 
@@ -261,36 +345,68 @@
                 for (const c of pc.queuedCandidates) {
                     await pc.addIceCandidate(new RTCIceCandidate(c));
                 }
+                Logger.info('answer:queued‑cands', {from: userUUID, count: pc.queuedCandidates.length});
                 pc.queuedCandidates = [];
             }
 
             // 5. Create & send the SDP answer
+            const tAns = performance.now();
             const answer = await pc.createAnswer();
             await pc.setLocalDescription(answer);
+            Logger.info('answer:local‑desc', {
+                to: userUUID,
+                ms: (performance.now() - tAns)|0,
+                sdpBytes: answer.sdp.length
+            });
 
-            console.log(`✅ Answer created and local description set for ${userUUID}`);
             ws.send(JSON.stringify({ type: 'answer', uuid: userUUID, answer }));
+            Logger.info('answer:sent', {to: userUUID});
         }
 
         function wireUpPeer(pc, uuid) {
-            if (pc._tracksAdded) return;
+            if (pc._tracksAdded) {             // already initialised
+                Logger.info('wire:skip‑repeat', {peer: uuid});
+                return;
+            }
+            Logger.info('wire:start', {
+                peer: uuid,
+                haveLocalStream: !!localStream,
+                trackCnt: localStream?.getTracks().length || 0
+            });
 
             // tracks
-            pc.ontrack = (e) => addRemoteStream(e.streams[0], uuid);
+            pc.ontrack = (e) => {
+                Logger.info('wire:ontrack', {peer: uuid, streams: e.streams.length});
+                addRemoteStream(e.streams[0], uuid);
+            };
             // local ICE → signalling
             pc.onicecandidate = (e) => {
                 if (e.candidate) {
+                    Logger.info('wire:ice‑local', {peer: uuid, type: e.candidate.type});
                     ws.send(JSON.stringify({ type:'candidate', uuid, candidate:e.candidate }));
                 }
             };
             // (optional) detect drop‑outs
             pc.oniceconnectionstatechange = () => {
-                if (['failed','disconnected','closed'].includes(pc.iceConnectionState)) {
+                const st = pc.iceConnectionState;
+                Logger.info('wire:ice‑state', {peer: uuid, state: st});
+
+                if (st === 'connected' || st === 'completed') {
+                    Logger.info('wire:ice‑established', {peer: uuid});
+                }
+
+                if (['failed','disconnected','closed'].includes(st)) {
                     handleUserDisconnect(uuid);
                 }
             };
+
+            pc.onicegatheringstatechange = () => {
+                Logger.info('wire:ice‑gather', {peer: uuid, state: pc.iceGatheringState});
+            };
+
             // local tracks
             localStream.getTracks().forEach(t => pc.addTrack(t, localStream));
+            Logger.info('wire:tracks‑added', {peer: uuid});
             
             pc._tracksAdded = true;
         }
@@ -299,18 +415,19 @@
             const videoId = `video-${uuid}`; // ✅ Use UUID for consistency
 
             if (document.getElementById(videoId)) {
-                console.warn(`⚠️ Duplicate video for ${uuid}. Skipping.`);
+                Logger.warn('remote:dup‑video', {peer: uuid});
                 return;
             }
 
-            let remoteVideo = document.createElement('video');
-            remoteVideo.srcObject = stream;
-            remoteVideo.autoplay = true;
-            remoteVideo.playsInline = true;
-            remoteVideo.muted       = true;
-            remoteVideo.id = videoId; // ✅ Ensure correct ID format
+            const remoteVideo = Object.assign(document.createElement('video'), {
+                srcObject: stream, autoplay:true, playsInline:true, muted:true, id: videoId
+            });
             document.getElementById('videos').appendChild(remoteVideo);
-            console.log(`📺 Added remote video for ${uuid}`);
+
+            Logger.info('remote:video‑added', {
+                peer: uuid,
+                tracks: stream.getTracks().map(t => t.kind)
+            });
         }
 
 
@@ -318,16 +435,18 @@
             localStream.getAudioTracks().forEach(track => track.enabled = !track.enabled);
             isMuted = !isMuted;
             document.getElementById('mute-btn').textContent = isMuted ? 'Unmute' : 'Mute';
+            Logger.info('ui:mute‑toggle', {muted: isMuted});
         }
 
         function toggleVideo() {
             localStream.getVideoTracks().forEach(track => track.enabled = !track.enabled);
             isVideoStopped = !isVideoStopped;
             document.getElementById('video-btn').textContent = isVideoStopped ? 'Start Video' : 'Stop Video';
+            Logger.info('ui:video‑toggle', {stopped: isVideoStopped});
         }
 
         function handleUserDisconnect(uuid) {
-            console.log(`🚪 User ${uuid} disconnected`);
+            Logger.info('peer:disconnect', {peer: uuid});
 
             // ✅ Ensure correct video ID
             const videoId = `video-${uuid}`;
@@ -335,18 +454,18 @@
 
             if (videoElement) {
                 videoElement.remove();
-                console.log(`🗑 Removed video for ${uuid}`);
+                Logger.info('peer:video‑removed', {peer: uuid});
             } else {
-                console.warn(`⚠️ Video element for ${uuid} not found.`);
+                Logger.warn('peer:video‑missing', {peer: uuid});
             }
 
             // ✅ Ensure the peer connection exists before closing it
             if (peers[uuid]) {
-                console.log(`🔌 Closing peer connection for ${uuid}`);
                 peers[uuid].close();
                 delete peers[uuid];
+                Logger.info('peer:pc‑closed', {peer: uuid});
             } else {
-                console.warn(`⚠️ No peer connection found for ${uuid}, but video was removed.`);
+                Logger.warn('peer:pc‑missing', {peer: uuid});
             }
         }
 

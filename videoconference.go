@@ -9,10 +9,16 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/gorilla/websocket"
 )
+
+var debugEnabled = func() bool {
+	v := strings.ToLower(os.Getenv("WEBRTC_DEBUG"))
+	return v == "1" || v == "true" || v == "yes"
+}()
 
 var clients = make(map[*websocket.Conn]string)
 var broadcast = make(chan Message)
@@ -23,6 +29,7 @@ type Message struct {
 	Offer     interface{} `json:"offer,omitempty"`
 	Answer    interface{} `json:"answer,omitempty"`
 	Candidate interface{} `json:"candidate,omitempty"`
+	Enable    bool        `json:"enable,omitempty"`
 }
 
 // Define constants and variables
@@ -42,6 +49,10 @@ func handleWebsocket(w http.ResponseWriter, r *http.Request) {
 
 	clients[conn] = "" // Initialize empty userUUID
 	log.Println("✅ New user connected")
+
+	if debugEnabled {
+		_ = conn.WriteJSON(Message{Type: "debug", Enable: true})
+	}
 
 	for {
 		_, message, err := conn.ReadMessage()
@@ -121,3 +132,51 @@ func generateTurnCredentials(secret, user string, ttlSeconds int64) (string, str
 
 	return username, password
 }
+
+func handleLogSocket(w http.ResponseWriter, r *http.Request) {
+    // If debug is OFF simply refuse the connection with 403
+    if !debugEnabled {
+        http.Error(w, "logging disabled", http.StatusForbidden)
+        return
+    }
+
+    conn, err := upgrader.Upgrade(w, r, nil)
+    if err != nil {
+        log.Println("log‑socket upgrade error:", err)
+        return
+    }
+    defer conn.Close()
+
+    // open (or create) an append‑only file per day
+	// save to serverlogs directory, create directory if it doesn't exist
+	if err := os.MkdirAll("serverlogs", 0755); err != nil {
+		log.Println("cannot create serverlogs directory:", err)
+		return
+	}
+	// create a file name based on the current date
+	fileName := "serverlogs/" + time.Now().Format("2006-01-02") + ".webrtc.log"
+
+    f, err := os.OpenFile(fileName, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
+    if err != nil {
+        log.Println("cannot open log file:", err)
+        return
+    }
+    defer f.Close()
+
+    log.Printf("📝 log‑socket connected → %s", fileName)
+
+    for {
+        _, raw, err := conn.ReadMessage()
+        if err != nil {
+            log.Println("log‑socket closed:", err)
+            return
+        }
+        // write to file
+        if _, err := f.Write(append(raw, '\n')); err != nil {
+            log.Println("file write error:", err)
+        }
+        // mirror to stdout (optional)
+        log.Printf("[browser] %s", raw)
+    }
+}
+

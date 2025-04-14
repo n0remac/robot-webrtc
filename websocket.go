@@ -2,7 +2,6 @@ package main
 
 import (
 	"encoding/json"
-	"fmt"
 	"log"
 	"net/http"
 	"net/url"
@@ -58,7 +57,6 @@ func NewCommandRegistry() *CommandRegistry {
 func (cr *CommandRegistry) RegisterWebsocket(command string, handler CommandFunc) {
 	cr.mu.Lock()
 	defer cr.mu.Unlock()
-	fmt.Println("Registering command", command)
 	cr.handlers[command] = handler
 }
 
@@ -104,7 +102,6 @@ func (h *Hub) run() {
 }
 
 func (c *WebsocketClient) readPump(w http.ResponseWriter, r *http.Request) {
-	fmt.Println("Websocket readPump started")
 	defer func() {
 		hub.unregister <- c
 		c.conn.Close()
@@ -147,7 +144,7 @@ func (c *WebsocketClient) writePump() {
 	}
 }
 
-func websocketHandler(registry *CommandRegistry, mux *http.ServeMux){
+func websocketHandler(registry *CommandRegistry, mux *http.ServeMux) {
 	go hub.run()
 
 	mux.HandleFunc("/websocket", func(w http.ResponseWriter, r *http.Request) {
@@ -162,7 +159,6 @@ func websocketHandler(registry *CommandRegistry, mux *http.ServeMux){
 		if room == "" {
 			room = "default" // Fallback room if none is provided
 		}
-		fmt.Println("Websocket connection to room:", room)
 
 		conn, err := upgrader.Upgrade(w, r, nil)
 		if err != nil {

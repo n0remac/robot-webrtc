@@ -1,7 +1,6 @@
 package main
 
 import (
-	"fmt"
 	"log"
 	"net/http"
 	"os"
@@ -37,6 +36,12 @@ var upgrader = websocket.Upgrader{
 }
 
 func main() {
+	if debugEnabled {
+		log.Println("🔍 WEBRTC_DEBUG is ON – logging endpoint active")
+	} else {
+		log.Println("WEBRTC_DEBUG is OFF – logging endpoint will refuse connections")
+	}
+
 	// Serve static files from the 'web' directory
 	fs := http.FileServer(http.Dir("./web"))
 	mux := http.NewServeMux()
@@ -53,11 +58,14 @@ func main() {
 	// Handle the TURN credentials endpoint
 	mux.HandleFunc("/turn-credentials", handleTurnCredentials)
 
+	// Logging endpoint
+	mux.HandleFunc("/logs", handleLogSocket)
+
 	// Apps
 	Home(mux, websocketRegistry)
 	ShadowReddit(mux)
 	GenerateStory(mux)
 
-	fmt.Printf("Starting server at http://localhost%s\n", webPort)
+	log.Println("WebRTC server started on port", webPort)
 	log.Fatal(http.ListenAndServe(webPort, mux))
 }
