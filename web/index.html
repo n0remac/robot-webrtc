@@ -49,17 +49,27 @@
         document.getElementById('mute-btn').addEventListener('click', toggleMute);
         document.getElementById('video-btn').addEventListener('click', toggleVideo);
 
+        let myUUID = null;
+
+        window.addEventListener('beforeunload', () => {
+            if (ws && ws.readyState === WebSocket.OPEN) {
+                ws.send(JSON.stringify({ type:'leave', uuid: myUUID }));
+            }
+        });
+
         let localStream;
         let peers = {};
         let ws;
 
-        let peerConnection;
+        const pendingCandidates = {};
+
         let isMuted = false;
         let isVideoStopped = false;
 
         let myName;
 
         let globalIceServers = [];
+
 
         async function joinSession() {
             // 1) Get the user name
@@ -97,7 +107,7 @@
             if (turnData && turnData.username && turnData.password) {
                 // TURN over UDP (fast, but might be blocked)
                 globalIceServers.push({
-                    urls: 'turn:noremac.dev:3478?transport=udp',
+                    urls: 'turn:noremac.dev:443?transport=udp',
                     username: turnData.username,
                     credential: turnData.password
                 });
@@ -137,6 +147,7 @@
             const localVideo = document.createElement('video');
             localVideo.srcObject = localStream;
             localVideo.autoplay = true;
+            localVideo.playsInline = true;
             localVideo.muted = true;
             document.getElementById('videos').appendChild(localVideo);
 
@@ -174,21 +185,19 @@
                             console.warn(`⚠️ No peer connection found for ${data.uuid} when setting remote description!`);
                         }
                         break;
-
+                    
                     case 'candidate':
                         console.log(`📡 Received ICE candidate for ${data.uuid}`);
                         if (!peers[data.uuid]) {
-                            console.warn(`⚠️ No peer connection for ${data.uuid} yet, creating a placeholder.`);
-                            peers[data.uuid] = new RTCPeerConnection({ iceServers: globalIceServers });
-                            peers[data.uuid].queuedCandidates = [];
+                            // no PC yet – just queue it
+                            (pendingCandidates[data.uuid] ||= []).push(data.candidate);
+                            return;                           //  <-- nothing else to do
                         }
-
+                        // PC already exists
                         if (peers[data.uuid].remoteDescription) {
-                            console.log(`📡 Adding ICE candidate for ${data.uuid}`);
                             await peers[data.uuid].addIceCandidate(new RTCIceCandidate(data.candidate));
                         } else {
-                            console.warn(`⚠️ Queuing ICE candidate for ${data.uuid} (remote description not set yet)`);
-                            peers[data.uuid].queuedCandidates.push(data.candidate);
+                            (peers[data.uuid].queuedCandidates ||= []).push(data.candidate);
                         }
                         break;
 
@@ -199,102 +208,91 @@
                 }
             };
         }
-
         async function createOffer(userUUID) {
-            console.log(`📡 Sending WebRTC Offer to ${userUUID}`);
+            console.log(`📡 Creating WebRTC offer for ${userUUID}`);
 
-            // Use a shared/global iceServers that you prepared after fetching ephemeral TURN creds
-            const peerConnection = new RTCPeerConnection({ iceServers: globalIceServers });
+            // 1  Get (or reuse) the RTCPeerConnection
+            let pc = peers[userUUID];
+            if (!pc) {
+                pc = peers[userUUID] = new RTCPeerConnection({ iceServers: globalIceServers });
+                wireUpPeer(pc, userUUID);          // attaches tracks & event handlers once
+            }
 
-            peers[userUUID] = peerConnection; 
-            peers[userUUID].queuedCandidates = []; 
-
-            // Add local tracks to the PeerConnection
-            localStream.getTracks().forEach(track => peerConnection.addTrack(track, localStream));
-
-            // Listen for ICE candidates to send to the remote peer
-            peerConnection.onicecandidate = (event) => {
-                if (event.candidate) {
-                    console.log(`📡 Sending ICE candidate for ${userUUID}`);
-                    ws.send(JSON.stringify({ 
-                        type: 'candidate', 
-                        uuid: userUUID, 
-                        candidate: event.candidate 
-                    }));
+            // 2  Apply any ICE candidates that arrived before the PC existed
+            if (pendingCandidates[userUUID]) {
+                for (const c of pendingCandidates[userUUID]) {
+                    await pc.addIceCandidate(new RTCIceCandidate(c));
                 }
-            };
+                delete pendingCandidates[userUUID];
+            }
 
-            // When the remote peer adds a track, render the stream
-            peerConnection.ontrack = (event) => {
-                console.log(`📺 Video stream received from ${userUUID}`);
-                addRemoteStream(event.streams[0], userUUID);
-            };
-
-            // Create and set local offer
-            const offer = await peerConnection.createOffer();
-            await peerConnection.setLocalDescription(offer);
+            // 3  Create the SDP offer, set it locally, then signal it
+            const offer = await pc.createOffer();
+            await pc.setLocalDescription(offer);
 
             console.log(`✅ Offer created and local description set for ${userUUID}`);
-
-            // Send the offer to the remote peer via WebSocket
             ws.send(JSON.stringify({ type: 'offer', uuid: userUUID, offer }));
         }
 
         async function createAnswer(userUUID, offer) {
-            console.log(`📡 Answering WebRTC Offer from ${userUUID}`);
+            console.log(`📡 Answering WebRTC offer from ${userUUID}`);
 
-            // Use the same ephemeral TURN credentials that were fetched and stored in globalIceServers
-            const peerConnection = new RTCPeerConnection({ iceServers: globalIceServers });
-
-            peers[userUUID] = peerConnection;
-            peers[userUUID].queuedCandidates = [];
-
-            // Add local media tracks
-            localStream.getTracks().forEach(track => peerConnection.addTrack(track, localStream));
-
-            // Send ICE candidates to the remote peer
-            peerConnection.onicecandidate = (event) => {
-                if (event.candidate) {
-                    console.log(`📡 Sending ICE candidate for ${userUUID}`);
-                    ws.send(JSON.stringify({ 
-                        type: 'candidate', 
-                        uuid: userUUID, 
-                        candidate: event.candidate 
-                    }));
-                }
-            };
-
-            // Handle incoming remote track
-            peerConnection.ontrack = (event) => {
-                console.log(`📺 Video stream received from ${userUUID}`);
-                addRemoteStream(event.streams[0], userUUID);
-            };
-
-            try {
-                // Set the remote offer
-                await peerConnection.setRemoteDescription(new RTCSessionDescription(offer));
-                console.log(`✅ Remote offer set for ${userUUID}`);
-            } catch (error) {
-                console.error(`❌ Error setting remote description: ${error}`);
-                return;
+            // 1. Get (or build) the peer‑connection
+            let pc = peers[userUUID];
+            if (!pc) {
+                pc = peers[userUUID] = new RTCPeerConnection({ iceServers: globalIceServers });
+                wireUpPeer(pc, userUUID);               // attaches tracks & handlers
             }
 
-            // If we already have queued ICE candidates for this peer, apply them now
-            if (peers[userUUID].queuedCandidates && peers[userUUID].queuedCandidates.length > 0) {
-                console.log(`🚀 Applying queued ICE candidates for ${userUUID}`);
-                for (const candidate of peers[userUUID].queuedCandidates) {
-                    await peers[userUUID].addIceCandidate(new RTCIceCandidate(candidate));
+            // 2. Apply the remote offer
+            await pc.setRemoteDescription(new RTCSessionDescription(offer));
+            console.log(`✅ Remote description set for ${userUUID}`);
+
+            // 3. Flush any ICE candidates that arrived before we had a PC
+            if (pendingCandidates[userUUID]) {
+                for (const c of pendingCandidates[userUUID]) {
+                    await pc.addIceCandidate(new RTCIceCandidate(c));
                 }
-                peers[userUUID].queuedCandidates = []; // Clear the queue after applying
+                delete pendingCandidates[userUUID];
             }
 
-            // Create and set our local answer
-            const answer = await peerConnection.createAnswer();
-            await peerConnection.setLocalDescription(answer);
+            // 4. Flush candidates that were queued while waiting for remote SDP
+            if (pc.queuedCandidates && pc.queuedCandidates.length) {
+                for (const c of pc.queuedCandidates) {
+                    await pc.addIceCandidate(new RTCIceCandidate(c));
+                }
+                pc.queuedCandidates = [];
+            }
+
+            // 5. Create & send the SDP answer
+            const answer = await pc.createAnswer();
+            await pc.setLocalDescription(answer);
+
             console.log(`✅ Answer created and local description set for ${userUUID}`);
-
-            // Send the answer back to the remote peer through the server
             ws.send(JSON.stringify({ type: 'answer', uuid: userUUID, answer }));
+        }
+
+        function wireUpPeer(pc, uuid) {
+            if (pc._tracksAdded) return;
+            
+            // tracks
+            pc.ontrack = (e) => addRemoteStream(e.streams[0], uuid);
+            // local ICE → signalling
+            pc.onicecandidate = (e) => {
+                if (e.candidate) {
+                    ws.send(JSON.stringify({ type:'candidate', uuid, candidate:e.candidate }));
+                }
+            };
+            // (optional) detect drop‑outs
+            pc.oniceconnectionstatechange = () => {
+                if (['failed','disconnected','closed'].includes(pc.iceConnectionState)) {
+                    handleUserDisconnect(uuid);
+                }
+            };
+            // local tracks
+            localStream.getTracks().forEach(t => pc.addTrack(t, localStream));
+            
+            pc._tracksAdded = true;
         }
 
         function addRemoteStream(stream, uuid) {
@@ -308,6 +306,8 @@
             let remoteVideo = document.createElement('video');
             remoteVideo.srcObject = stream;
             remoteVideo.autoplay = true;
+            remoteVideo.playsInline = true;
+            remoteVideo.muted       = true;
             remoteVideo.id = videoId; // ✅ Ensure correct ID format
             document.getElementById('videos').appendChild(remoteVideo);
             console.log(`📺 Added remote video for ${uuid}`);

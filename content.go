@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io/fs"
-	"io/ioutil"
 	"log"
 	"os"
 	"path/filepath"
@@ -28,79 +27,78 @@ type ContentWithKeywords struct {
 
 // KeywordsResponse represents the function call response for generating keywords.
 type KeywordsResponse struct {
-    Keywords string `json:"keywords"`
+	Keywords string `json:"keywords"`
 }
 
 // generateKeywords extracts keywords from the provided text using the OpenAI API.
 func generateKeywords(client *openai.Client, text string) ([]string, error) {
-    // Define a system prompt that instructs the model to extract keywords from the text.
-    systemPrompt := openai.ChatCompletionMessage{
-        Role:    openai.ChatMessageRoleSystem,
-        Content: "You are an assistant that extracts keywords from a given text. Your response should include a comma-separated list of keywords that directly appear in the text. Do not invent new keywords.",
-    }
+	// Define a system prompt that instructs the model to extract keywords from the text.
+	systemPrompt := openai.ChatCompletionMessage{
+		Role:    openai.ChatMessageRoleSystem,
+		Content: "You are an assistant that extracts keywords from a given text. Your response should include a comma-separated list of keywords that directly appear in the text. Do not invent new keywords.",
+	}
 
-    // Build the user message with the provided text.
-    userMessage := openai.ChatCompletionMessage{
-        Role:    openai.ChatMessageRoleUser,
-        Content: fmt.Sprintf("Extract keywords from the following text:\n\n%s", text),
-    }
+	// Build the user message with the provided text.
+	userMessage := openai.ChatCompletionMessage{
+		Role:    openai.ChatMessageRoleUser,
+		Content: fmt.Sprintf("Extract keywords from the following text:\n\n%s", text),
+	}
 
-    // Define the function for generating keywords.
-    fn := openai.FunctionDefinition{
-        Name:        "generate_keywords",
-        Description: "Generate a comma-separated list of keywords from a given text.",
-        Parameters: map[string]any{
-            "type": "object",
-            "properties": map[string]any{
-                "keywords": map[string]any{
-                    "type": "string",
-                },
-            },
-            "required": []string{"keywords"},
-        },
-    }
+	// Define the function for generating keywords.
+	fn := openai.FunctionDefinition{
+		Name:        "generate_keywords",
+		Description: "Generate a comma-separated list of keywords from a given text.",
+		Parameters: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"keywords": map[string]any{
+					"type": "string",
+				},
+			},
+			"required": []string{"keywords"},
+		},
+	}
 
-    // Build the chat completion request.
-    chatRequest := openai.ChatCompletionRequest{
-        Model: "gpt-4-0613",
-        Messages: []openai.ChatCompletionMessage{
-            systemPrompt,
-            userMessage,
-        },
-        Functions:    []openai.FunctionDefinition{fn},
-        FunctionCall: openai.FunctionCall{Name: "generate_keywords"},
-    }
+	// Build the chat completion request.
+	chatRequest := openai.ChatCompletionRequest{
+		Model: "gpt-4-0613",
+		Messages: []openai.ChatCompletionMessage{
+			systemPrompt,
+			userMessage,
+		},
+		Functions:    []openai.FunctionDefinition{fn},
+		FunctionCall: openai.FunctionCall{Name: "generate_keywords"},
+	}
 
-    chatResp, err := client.CreateChatCompletion(context.Background(), chatRequest)
-    if err != nil {
-        return nil, fmt.Errorf("failed to get response from OpenAI: %w", err)
-    }
+	chatResp, err := client.CreateChatCompletion(context.Background(), chatRequest)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get response from OpenAI: %w", err)
+	}
 
-    choice := chatResp.Choices[0]
-    if choice.Message.FunctionCall == nil {
-        return nil, fmt.Errorf("no function call in OpenAI response")
-    }
+	choice := chatResp.Choices[0]
+	if choice.Message.FunctionCall == nil {
+		return nil, fmt.Errorf("no function call in OpenAI response")
+	}
 
-    // Parse the function call arguments.
-    var parsed KeywordsResponse
-    err = json.Unmarshal([]byte(choice.Message.FunctionCall.Arguments), &parsed)
-    if err != nil {
-        return nil, fmt.Errorf("failed to unmarshal function response: %w", err)
-    }
+	// Parse the function call arguments.
+	var parsed KeywordsResponse
+	err = json.Unmarshal([]byte(choice.Message.FunctionCall.Arguments), &parsed)
+	if err != nil {
+		return nil, fmt.Errorf("failed to unmarshal function response: %w", err)
+	}
 
-    // Split the comma-separated keywords and trim whitespace.
-    parts := strings.Split(parsed.Keywords, ",")
-    var keywords []string
-    for _, p := range parts {
-        trimmed := strings.TrimSpace(p)
-        if trimmed != "" {
-            keywords = append(keywords, trimmed)
-        }
-    }
+	// Split the comma-separated keywords and trim whitespace.
+	parts := strings.Split(parsed.Keywords, ",")
+	var keywords []string
+	for _, p := range parts {
+		trimmed := strings.TrimSpace(p)
+		if trimmed != "" {
+			keywords = append(keywords, trimmed)
+		}
+	}
 
-    return keywords, nil
+	return keywords, nil
 }
-
 
 // processContent scans the contentDir, generates keywords if needed, and writes an aggregated JSON file.
 func processContent() ([]ContentWithKeywords, error) {
@@ -125,7 +123,7 @@ func processContent() ([]ContentWithKeywords, error) {
 		}
 
 		// Read the text file.
-		data, err := ioutil.ReadFile(path)
+		data, err := os.ReadFile(path)
 		if err != nil {
 			log.Printf("Error reading %s: %v", path, err)
 			return nil
@@ -144,7 +142,7 @@ func processContent() ([]ContentWithKeywords, error) {
 		// Check if the JSON file exists.
 		if _, err := os.Stat(jsonPath); err == nil {
 			// JSON exists, load it.
-			jdata, err := ioutil.ReadFile(jsonPath)
+			jdata, err := os.ReadFile(jsonPath)
 			if err != nil {
 				log.Printf("Error reading JSON file %s: %v", jsonPath, err)
 			} else {
@@ -170,7 +168,7 @@ func processContent() ([]ContentWithKeywords, error) {
 				}
 				jdata, err := json.MarshalIndent(stored, "", "  ")
 				if err == nil {
-					err := ioutil.WriteFile(jsonPath, jdata, 0644)
+					err := os.WriteFile(jsonPath, jdata, 0644)
 					if err != nil {
 						log.Printf("Error writing JSON file %s: %v", jsonPath, err)
 					}
@@ -197,7 +195,7 @@ func processContent() ([]ContentWithKeywords, error) {
 	if err != nil {
 		return nil, err
 	}
-	err = ioutil.WriteFile(outputJSONFile, outData, 0644)
+	err = os.WriteFile(outputJSONFile, outData, 0644)
 	if err != nil {
 		return nil, err
 	}
