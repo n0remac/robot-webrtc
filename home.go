@@ -102,7 +102,7 @@ func HomePage(websocketRegistry *CommandRegistry) *Node {
 			Raw(loadFile("home.js")),
 		),
 		Attr("hx-ext", "ws"),
-		Attr("ws-connect", "/websocket?room="+id),
+		Attr("ws-connect", "/ws/hub?room="+id),
 		Div(Attrs(map[string]string{
 			"class":      "flex flex-col items-center min-h-screen",
 			"data-theme": "dark",

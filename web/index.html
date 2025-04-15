@@ -102,7 +102,7 @@
             };
             })();
         
-        Logger.attachSocket(`${wsProtocol}://${domainName}/logs`);
+        Logger.attachSocket(`${wsProtocol}://${domainName}/ws/logs`);
 
         document.getElementById('join-btn').addEventListener('click', joinSession);
         document.getElementById('mute-btn').addEventListener('click', toggleMute);
@@ -181,7 +181,7 @@
             Logger.info('ICE list built', {count: globalIceServers.length});
 
             // 5) Open WebSocket connection
-            ws = new WebSocket(`${wsProtocol}://${domainName}/ws`);
+            ws = new WebSocket(`${wsProtocol}://${domainName}/ws/video`);
 
             ws.onopen = () => {
                 Logger.info('WS open');

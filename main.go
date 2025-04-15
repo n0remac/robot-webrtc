@@ -48,24 +48,34 @@ func main() {
 
 	mux.Handle("/video/", http.StripPrefix("/video/", fs))
 
-	// Basic WebSocket handler
-	mux.HandleFunc("/ws", handleWebsocket)
-
-	// Newer Websocket code with command registry
-	websocketRegistry := NewCommandRegistry()
-	websocketHandler(websocketRegistry, mux)
+	// create global registry
+	globalRegistry := NewCommandRegistry()
+	
+	withWS("/ws/video", mux, videoSignalling)
+	withWS("/ws/hub",   mux, hubWS(globalRegistry))
+	withWS("/ws/logs",  mux, logSocketWS)
 
 	// Handle the TURN credentials endpoint
 	mux.HandleFunc("/turn-credentials", handleTurnCredentials)
 
-	// Logging endpoint
-	mux.HandleFunc("/logs", handleLogSocket)
-
 	// Apps
-	Home(mux, websocketRegistry)
+	Home(mux, globalRegistry)
 	ShadowReddit(mux)
 	GenerateStory(mux)
 
 	log.Println("WebRTC server started on port", webPort)
 	log.Fatal(http.ListenAndServe(webPort, mux))
+}
+
+
+func withWS(path string, mux *http.ServeMux, handler func(*websocket.Conn)) {
+	mux.HandleFunc(path, func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			log.Printf("WS upgrade %s → %v", path, err)
+			return
+		}
+		log.Printf("WS %s connected", path)
+		handler(conn) // delegate to feature‑specific logic
+	})
 }

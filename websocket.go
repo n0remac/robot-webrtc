@@ -3,7 +3,6 @@ package main
 import (
 	"encoding/json"
 	"log"
-	"net/http"
 	"net/url"
 	"sync"
 
@@ -101,7 +100,7 @@ func (h *Hub) run() {
 	}
 }
 
-func (c *WebsocketClient) readPump(w http.ResponseWriter, r *http.Request) {
+func (c *WebsocketClient) readPump() {
 	defer func() {
 		hub.unregister <- c
 		c.conn.Close()
@@ -144,37 +143,24 @@ func (c *WebsocketClient) writePump() {
 	}
 }
 
-func websocketHandler(registry *CommandRegistry, mux *http.ServeMux) {
-	go hub.run()
-
-	mux.HandleFunc("/websocket", func(w http.ResponseWriter, r *http.Request) {
-		// Extract room from query parameters
-		queryParams, err := url.ParseQuery(r.URL.RawQuery)
-		if err != nil {
-			log.Println("Error parsing query parameters:", err)
-			return
-		}
-
-		room := queryParams.Get("room")
-		if room == "" {
-			room = "default" // Fallback room if none is provided
-		}
-
-		conn, err := upgrader.Upgrade(w, r, nil)
-		if err != nil {
-			log.Println("Upgrade error:", err)
-			return
+func hubWS(globalRegistry *CommandRegistry) func(*websocket.Conn) {
+	return func(conn *websocket.Conn) {
+		// pull ?room=<name> from the query
+		room := "default"
+		if q, err := url.ParseQuery(conn.LocalAddr().String()); err == nil {
+			if r := q.Get("room"); r != "" {
+				room = r
+			}
 		}
 
 		client := &WebsocketClient{
 			conn:     conn,
 			send:     make(chan []byte, 256),
-			registry: registry,
+			registry: globalRegistry,
 			room:     room,
 		}
 		hub.register <- client
-
 		go client.writePump()
-		client.readPump(w, r)
-	})
+		client.readPump()
+	}
 }
