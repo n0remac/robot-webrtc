@@ -115,10 +115,13 @@
         let globalIceServers = [];
 
         const peers = {};
-        const pendingCandidates = {};    // Map of UUID -> ICE candidates array
-        const pendingOffers = {};        // Map of UUID -> offer SDP
-        const messageQueue = [];         // WebSocket messages buffered until ready
+        const pendingCandidates = {};
+        const pendingOffers = {};
+        const messageQueue = [];
         let wsReady = false;
+        const ICE_TIMEOUT_MS = 10000;
+        const MAX_RETRIES = 5;
+        const retryCounts = {}; 
 
         window.addEventListener('beforeunload', () => {
             if (ws && ws.readyState === WebSocket.OPEN) {
@@ -180,7 +183,7 @@
                 srcObject: localStream,
                 autoplay: true,
                 playsInline: true,
-                muted: false, // Could casue issue on some browsers
+                muted: false,
             });
             document.getElementById('videos').appendChild(video);
             Logger.info('local video added');
@@ -255,7 +258,13 @@
         }
 
         async function createOffer(uuid) {
-            Logger.info('createOffer', { to: uuid });
+            if ((retryCounts[uuid] || 0) >= MAX_RETRIES) {
+                Logger.warn('Max retries reached, will not reconnect', { peer: uuid });
+                return;
+            }
+            retryCounts[uuid] = (retryCounts[uuid] || 0) + 1;
+            Logger.info('createOffer', { to: uuid, attempt: retryCounts[uuid] });
+
             let pc = peers[uuid];
             if (!pc) {
                 pc = new RTCPeerConnection({ iceServers: globalIceServers });
@@ -322,10 +331,23 @@
                 }
             };
 
+            const timeout = setTimeout(() => {
+                if (pc.iceConnectionState !== 'connected' && pc.iceConnectionState !== 'completed') {
+                    Logger.warn('ICE timeout, attempting reconnect', { peer: uuid });
+                    handleUserDisconnect(uuid);
+                    createOffer(uuid);
+                }
+            }, ICE_TIMEOUT_MS);
+
             pc.oniceconnectionstatechange = () => {
                 Logger.info('ICE state', { peer: uuid, state: pc.iceConnectionState });
                 if (['failed', 'disconnected', 'closed'].includes(pc.iceConnectionState)) {
+                    clearTimeout(timeout);
                     handleUserDisconnect(uuid);
+                }
+                if (['connected', 'completed'].includes(pc.iceConnectionState)) {
+                    clearTimeout(timeout);
+                    retryCounts[uuid] = 0; // reset retry count on success
                 }
             };
 
@@ -357,7 +379,6 @@
                 delete peers[uuid];
             }
         }
-
         function toggleMute() {
             localStream.getAudioTracks().forEach(track => track.enabled = !track.enabled);
             isMuted = !isMuted;
