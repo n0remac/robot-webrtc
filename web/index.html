@@ -101,7 +101,7 @@
                 error: (...a)=>log('ERR' , ...a),
             };
             })();
-        
+
         Logger.attachSocket(`${wsProtocol}://${domainName}/ws/logs`);
 
         document.getElementById('join-btn').addEventListener('click', joinSession);
@@ -109,327 +109,254 @@
         document.getElementById('video-btn').addEventListener('click', toggleVideo);
 
         let myUUID = null;
-
-        let localStream;
-        let peers = {};
-        let ws;
-        const pendingCandidates = {};
-        let isMuted = false;
-        let isVideoStopped = false;
         let myName;
+        let localStream;
+        let ws;
         let globalIceServers = [];
+
+        const peers = {};
+        const pendingCandidates = {};    // Map of UUID -> ICE candidates array
+        const pendingOffers = {};        // Map of UUID -> offer SDP
+        const messageQueue = [];         // WebSocket messages buffered until ready
+        let wsReady = false;
 
         window.addEventListener('beforeunload', () => {
             if (ws && ws.readyState === WebSocket.OPEN) {
-                ws.send(JSON.stringify({ type:'leave', uuid: myUUID }));
-                Logger.info('sent leave on unload', {uuid: myUUID});
+                ws.send(JSON.stringify({ type: 'leave', uuid: myUUID }));
+                Logger.info('sent leave on unload', { uuid: myUUID });
             }
         });
 
         async function joinSession() {
-            // 1) Get the user name
             myName = document.getElementById('name').value;
-            if (!myName) {
-                alert('Please enter your name');
-                return;
-            }
+            if (!myName) return alert('Please enter your name');
             myUUID = generateUUID();
+            Logger.info('join click', { uuid: myUUID, name: myName });
 
-            Logger.info('join click', {uuid: myUUID, name: myName});
-
-            // 2) Hide the join screen, show participant view
             document.getElementById('join-screen').style.display = 'none';
             document.getElementById('participant-view').style.display = 'block';
 
-            // 3) Fetch ephemeral TURN credentials from your backend
-            let turnData = null;
-            const tFetchStart = performance.now();
+            const turnData = await fetchTurnCredentials();
+            setupIceServers(turnData);
+            await setupLocalMedia();
+            showLocalVideo();
+            await connectWebSocket();
+            flushBufferedMessages();
+        }
+
+        async function fetchTurnCredentials() {
             try {
-                const response = await fetch('/turn-credentials');
-                if (response.ok) {
-                    turnData = await response.json(); 
-                    Logger.info('TURN creds fetched', {ms: (performance.now()-tFetchStart)|0});
-                } else {
-                    Logger.warn('TURN fetch failed', {status: response.status});
-                }
-            } catch (err) {
-                Logger.error('TURN fetch threw', err);
+                const res = await fetch('/turn-credentials');
+                return res.ok ? res.json() : null;
+            } catch (e) {
+                Logger.error('TURN fetch failed', e);
+                return null;
             }
+        }
 
-            // 4) Build the iceServers array
+        function setupIceServers(turnData) {
             globalIceServers = [
-                // Public STUN server (fastest to try)
-                { urls: 'stun:stun.l.google.com:19302' }
+                { urls: 'stun:stun.l.google.com:19302' },
             ];
-
-            if (turnData && turnData.username && turnData.password) {
-                // TURN over UDP (fast, but might be blocked)
-                globalIceServers.push({
-                    urls: 'turn:turn.noremac.dev:3478?transport=udp',
-                    username: turnData.username,
-                    credential: turnData.password
-                });
-
-                // TURN over TLS on port 443 (fallback when UDP is blocked)
-                globalIceServers.push({
-                    urls: 'turns:turn.noremac.dev:443?transport=tcp',
-                    username: turnData.username,
-                    credential: turnData.password
-                });
+            if (turnData?.username && turnData?.password) {
+                globalIceServers.push({ urls: 'turn:turn.noremac.dev:3478?transport=udp', username: turnData.username, credential: turnData.password });
+                globalIceServers.push({ urls: 'turns:turn.noremac.dev:443?transport=tcp', username: turnData.username, credential: turnData.password });
             }
+            Logger.info('ICE list built', { count: globalIceServers.length });
+        }
 
-            Logger.info('ICE list built', {count: globalIceServers.length});
+        async function setupLocalMedia() {
+            try {
+                localStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+                Logger.info('gUM success');
+            } catch (err) {
+                Logger.error('getUserMedia failed', err);
+                throw err;
+            }
+        }
 
-            // 5) Open WebSocket connection
+        function showLocalVideo() {
+            const video = Object.assign(document.createElement('video'), {
+                srcObject: localStream,
+                autoplay: true,
+                playsInline: true,
+                muted: false, // Could casue issue on some browsers
+            });
+            document.getElementById('videos').appendChild(video);
+            Logger.info('local video added');
+        }
+
+        async function connectWebSocket() {
             ws = new WebSocket(`${wsProtocol}://${domainName}/ws/video`);
 
+            ws.onmessage = async ({ data }) => {
+                const msg = JSON.parse(data);
+                if (!wsReady) return messageQueue.push(msg);
+                await handleSignalingMessage(msg);
+            };
+
             ws.onopen = () => {
-                Logger.info('WS open');
-                // Notify server we joined
-                ws.send(JSON.stringify({ 
-                    type: 'join', 
-                    uuid: myUUID
-                }));
-                Logger.info('sent join', {uuid: myUUID});
+                wsReady = true;
+                Logger.info('WebSocket open');
+                ws.send(JSON.stringify({ type: 'join', uuid: myUUID }));
             };
-            
-            ws.onerror = e => Logger.error('WS error', e);
-            ws.onclose = e => Logger.warn('WS closed', {code:e.code, reason:e.reason});
-
-            // 6) Get local media (camera/mic)
-            Logger.info('getUserMedia start');
-            const gUMstart = performance.now();
-            try {
-                localStream = await navigator.mediaDevices.getUserMedia({video:true,audio:true});
-                Logger.info('gUM ok', {ms: (performance.now()-gUMstart)|0});
-            } catch (err) {
-                Logger.error('gUM failed', err);
-                return;   // can’t continue without media
-            }
-
-            // 7) Show local video
-            const localVideo = Object.assign(document.createElement('video'), {
-                srcObject: localStream, autoplay:true, playsInline:true, muted:true
-            });
-            document.getElementById('videos').appendChild(localVideo);
-            Logger.info('local video element added');
-
-            // 8) Listen for messages from other peers (via the server)
-            ws.onmessage = async (message) => {
-                const data = JSON.parse(message.data);
-                if (data.type === 'debug') {           // server → client toggle
-                    Logger.setDebug(!!data.enable);
-                    Logger.info('debug flag set', {enable: data.enable});
-                    return;
-                }
-
-                Logger.info('WS msg', data);
-
-                switch (data.type) {
-                    case 'join':
-                        if (data.uuid !== myUUID) {
-                            Logger.info('creating offer', {to:data.uuid});
-                            await createOffer(data.uuid);
-                        }
-                        break;
-
-                    case 'offer':
-                        Logger.info('offer recv', {from:data.uuid});
-                        await createAnswer(data.uuid, data.offer);
-                        break;
-
-                    case 'answer':
-                        if (peers[data.uuid]) {
-                            await peers[data.uuid].setRemoteDescription(new RTCSessionDescription(data.answer));
-                            Logger.info('remote SDP set', {peer:data.uuid});
-
-                            // If we had queued candidates before remote description was set, apply them now
-                            if (peers[data.uuid].queuedCandidates && peers[data.uuid].queuedCandidates.length > 0) {
-                                for (const candidate of peers[data.uuid].queuedCandidates) {
-                                    await peers[data.uuid].addIceCandidate(new RTCIceCandidate(candidate));
-                                }
-                                peers[data.uuid].queuedCandidates = [];
-                            }
-                        } else {
-                            Logger.warn('answer for unknown peer', {peer:data.uuid});
-                        }
-                        break;
-                    
-                    case 'candidate':
-                        Logger.info('candidate recv', {from:data.uuid});
-                        if (!peers[data.uuid]) {
-                            // no PC yet – just queue it
-                            (pendingCandidates[data.uuid] ||= []).push(data.candidate);
-                            return;                           //  <-- nothing else to do
-                        }
-                        // PC already exists
-                        if (peers[data.uuid].remoteDescription) {
-                            await peers[data.uuid].addIceCandidate(new RTCIceCandidate(data.candidate));
-                        } else {
-                            (peers[data.uuid].queuedCandidates ||= []).push(data.candidate);
-                        }
-                        break;
-
-                    case 'leave':
-                        Logger.info('leave recv', {peer:data.uuid});
-                        handleUserDisconnect(data.uuid);
-                        break;
-                }
-            };
+            ws.onerror = e => Logger.error('WebSocket error', e);
+            ws.onclose = e => Logger.warn('WebSocket closed', e);
         }
-        async function createOffer(userUUID) {
-            Logger.info('offer:start', {to: userUUID});
 
-            // 1  Get (or reuse) the RTCPeerConnection
-            let pc = peers[userUUID];
+        function flushBufferedMessages() {
+            while (messageQueue.length > 0) {
+                handleSignalingMessage(messageQueue.shift());
+            }
+        }
+
+        async function handleSignalingMessage(data) {
+            Logger.info('WS msg', data);
+            switch (data.type) {
+                case 'join':
+                    if (data.uuid !== myUUID) await createOffer(data.uuid);
+                    break;
+                case 'offer':
+                    if (!peers[data.uuid]) pendingOffers[data.uuid] = data.offer;
+                    await createAnswer(data.uuid, data.offer);
+                    break;
+                case 'answer':
+                    await setRemoteDescriptionSafely(data.uuid, data.answer);
+                    break;
+                case 'candidate':
+                    bufferOrApplyCandidate(data.uuid, data.candidate);
+                    break;
+                case 'leave':
+                    handleUserDisconnect(data.uuid);
+                    break;
+            }
+        }
+
+        function bufferOrApplyCandidate(uuid, candidate) {
+            if (!peers[uuid]) {
+                (pendingCandidates[uuid] ||= []).push(candidate);
+            } else if (peers[uuid].remoteDescription) {
+                peers[uuid].addIceCandidate(new RTCIceCandidate(candidate));
+            } else {
+                (peers[uuid].queuedCandidates ||= []).push(candidate);
+            }
+        }
+
+        async function setRemoteDescriptionSafely(uuid, answer) {
+            if (!peers[uuid]) return Logger.warn('Answer for unknown peer', { uuid });
+            await peers[uuid].setRemoteDescription(new RTCSessionDescription(answer));
+            Logger.info('remote SDP set', { uuid });
+            if (peers[uuid].queuedCandidates) {
+                for (const c of peers[uuid].queuedCandidates) {
+                    await peers[uuid].addIceCandidate(new RTCIceCandidate(c));
+                }
+                peers[uuid].queuedCandidates = [];
+            }
+        }
+
+        async function createOffer(uuid) {
+            Logger.info('createOffer', { to: uuid });
+            let pc = peers[uuid];
             if (!pc) {
-                pc = peers[userUUID] = new RTCPeerConnection({ iceServers: globalIceServers });
-                wireUpPeer(pc, userUUID);          // attaches tracks & event handlers once
-                Logger.info('offer:new‑pc', {to: userUUID});
+                pc = new RTCPeerConnection({ iceServers: globalIceServers });
+                wireUpPeer(pc, uuid);
+                peers[uuid] = pc;
             }
 
-            // 2  Apply any ICE candidates that arrived before the PC existed
-            if (pendingCandidates[userUUID]) {
-                for (const c of pendingCandidates[userUUID]) {
+            if (pendingCandidates[uuid]) {
+                for (const c of pendingCandidates[uuid]) {
                     await pc.addIceCandidate(new RTCIceCandidate(c));
                 }
-                Logger.info('offer:pre‑pc‑cands', {to: userUUID, count: pendingCandidates[userUUID].length});
-                delete pendingCandidates[userUUID];
+                delete pendingCandidates[uuid];
             }
 
-            // 3  Create the SDP offer, set it locally, then signal it
-            const t0 = performance.now();
             const offer = await pc.createOffer();
             await pc.setLocalDescription(offer);
-
-            Logger.info('offer:local‑desc', {
-                to: userUUID,
-                ms: (performance.now() - t0)|0,
-                sdpBytes: offer.sdp.length
-            });
-            ws.send(JSON.stringify({ type: 'offer', uuid: userUUID, offer }));
-            Logger.info('offer:sent', {to: userUUID});
+            ws.send(JSON.stringify({ type: 'offer', uuid, offer }));
+            Logger.info('offer sent', { to: uuid });
         }
 
-        async function createAnswer(userUUID, offer) {
-            Logger.info('answer:start', {from: userUUID});
-
-            // 1. Get (or build) the peer‑connection
-            let pc = peers[userUUID];
+        async function createAnswer(uuid, offer) {
+            Logger.info('createAnswer', { from: uuid });
+            let pc = peers[uuid];
             if (!pc) {
-                pc = peers[userUUID] = new RTCPeerConnection({ iceServers: globalIceServers });
-                wireUpPeer(pc, userUUID);               // attaches tracks & handlers
-                Logger.info('answer:new‑pc', {from: userUUID});
+                pc = new RTCPeerConnection({ iceServers: globalIceServers });
+                wireUpPeer(pc, uuid);
+                peers[uuid] = pc;
             }
 
-            // 2. Apply the remote offer
-            const tSet = performance.now();
             await pc.setRemoteDescription(new RTCSessionDescription(offer));
-            Logger.info('answer:remote‑desc', {
-                from: userUUID,
-                ms: (performance.now() - tSet)|0,
-                sdpBytes: offer.sdp.length
-            });
 
-            // 3. Flush any ICE candidates that arrived before we had a PC
-            if (pendingCandidates[userUUID]) {
-                for (const c of pendingCandidates[userUUID]) {
+            if (pendingCandidates[uuid]) {
+                for (const c of pendingCandidates[uuid]) {
                     await pc.addIceCandidate(new RTCIceCandidate(c));
                 }
-                Logger.info('answer:pre‑pc‑cands', {from: userUUID, count: pendingCandidates[userUUID].length});
-                delete pendingCandidates[userUUID];
+                delete pendingCandidates[uuid];
             }
 
-            // 4. Flush candidates that were queued while waiting for remote SDP
-            if (pc.queuedCandidates && pc.queuedCandidates.length) {
+            if (pc.queuedCandidates?.length) {
                 for (const c of pc.queuedCandidates) {
                     await pc.addIceCandidate(new RTCIceCandidate(c));
                 }
-                Logger.info('answer:queued‑cands', {from: userUUID, count: pc.queuedCandidates.length});
                 pc.queuedCandidates = [];
             }
 
-            // 5. Create & send the SDP answer
-            const tAns = performance.now();
             const answer = await pc.createAnswer();
             await pc.setLocalDescription(answer);
-            Logger.info('answer:local‑desc', {
-                to: userUUID,
-                ms: (performance.now() - tAns)|0,
-                sdpBytes: answer.sdp.length
-            });
-
-            ws.send(JSON.stringify({ type: 'answer', uuid: userUUID, answer }));
-            Logger.info('answer:sent', {to: userUUID});
+            ws.send(JSON.stringify({ type: 'answer', uuid, answer }));
+            Logger.info('answer sent', { to: uuid });
         }
 
         function wireUpPeer(pc, uuid) {
-            if (pc._tracksAdded) {             // already initialised
-                Logger.info('wire:skip‑repeat', {peer: uuid});
-                return;
-            }
-            Logger.info('wire:start', {
-                peer: uuid,
-                haveLocalStream: !!localStream,
-                trackCnt: localStream?.getTracks().length || 0
-            });
+            if (pc._tracksAdded) return;
 
-            // tracks
             pc.ontrack = (e) => {
-                Logger.info('wire:ontrack', {peer: uuid, streams: e.streams.length});
+                Logger.info('ontrack', { peer: uuid });
                 addRemoteStream(e.streams[0], uuid);
             };
-            // local ICE → signalling
+
             pc.onicecandidate = (e) => {
                 if (e.candidate) {
-                    Logger.info('wire:ice‑local', {peer: uuid, type: e.candidate.type});
-                    ws.send(JSON.stringify({ type:'candidate', uuid, candidate:e.candidate }));
+                    ws.send(JSON.stringify({ type: 'candidate', uuid, candidate: e.candidate }));
+                    Logger.info('sent candidate', { to: uuid });
                 }
             };
-            // (optional) detect drop‑outs
+
             pc.oniceconnectionstatechange = () => {
-                const st = pc.iceConnectionState;
-                Logger.info('wire:ice‑state', {peer: uuid, state: st});
-
-                if (st === 'connected' || st === 'completed') {
-                    Logger.info('wire:ice‑established', {peer: uuid});
-                }
-
-                if (['failed','disconnected','closed'].includes(st)) {
+                Logger.info('ICE state', { peer: uuid, state: pc.iceConnectionState });
+                if (['failed', 'disconnected', 'closed'].includes(pc.iceConnectionState)) {
                     handleUserDisconnect(uuid);
                 }
             };
 
-            pc.onicegatheringstatechange = () => {
-                Logger.info('wire:ice‑gather', {peer: uuid, state: pc.iceGatheringState});
-            };
-
-            // local tracks
             localStream.getTracks().forEach(t => pc.addTrack(t, localStream));
-            Logger.info('wire:tracks‑added', {peer: uuid});
-            
             pc._tracksAdded = true;
         }
 
         function addRemoteStream(stream, uuid) {
-            const videoId = `video-${uuid}`; // ✅ Use UUID for consistency
+            const id = `video-${uuid}`;
+            if (document.getElementById(id)) return;
 
-            if (document.getElementById(videoId)) {
-                Logger.warn('remote:dup‑video', {peer: uuid});
-                return;
-            }
-
-            const remoteVideo = Object.assign(document.createElement('video'), {
-                srcObject: stream, autoplay:true, playsInline:true, muted:true, id: videoId
+            const video = Object.assign(document.createElement('video'), {
+                id,
+                srcObject: stream,
+                autoplay: true,
+                playsInline: true,
+                muted: true
             });
-            document.getElementById('videos').appendChild(remoteVideo);
-
-            Logger.info('remote:video‑added', {
-                peer: uuid,
-                tracks: stream.getTracks().map(t => t.kind)
-            });
+            document.getElementById('videos').appendChild(video);
+            Logger.info('remote video added', { peer: uuid });
         }
 
+        function handleUserDisconnect(uuid) {
+            Logger.info('disconnecting peer', { peer: uuid });
+            const video = document.getElementById(`video-${uuid}`);
+            if (video) video.remove();
+            if (peers[uuid]) {
+                peers[uuid].close();
+                delete peers[uuid];
+            }
+        }
 
         function toggleMute() {
             localStream.getAudioTracks().forEach(track => track.enabled = !track.enabled);
@@ -443,30 +370,6 @@
             isVideoStopped = !isVideoStopped;
             document.getElementById('video-btn').textContent = isVideoStopped ? 'Start Video' : 'Stop Video';
             Logger.info('ui:video‑toggle', {stopped: isVideoStopped});
-        }
-
-        function handleUserDisconnect(uuid) {
-            Logger.info('peer:disconnect', {peer: uuid});
-
-            // ✅ Ensure correct video ID
-            const videoId = `video-${uuid}`;
-            const videoElement = document.getElementById(videoId);
-
-            if (videoElement) {
-                videoElement.remove();
-                Logger.info('peer:video‑removed', {peer: uuid});
-            } else {
-                Logger.warn('peer:video‑missing', {peer: uuid});
-            }
-
-            // ✅ Ensure the peer connection exists before closing it
-            if (peers[uuid]) {
-                peers[uuid].close();
-                delete peers[uuid];
-                Logger.info('peer:pc‑closed', {peer: uuid});
-            } else {
-                Logger.warn('peer:pc‑missing', {peer: uuid});
-            }
         }
 
         function generateUUID() {

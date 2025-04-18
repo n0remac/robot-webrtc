@@ -62,6 +62,8 @@ func main() {
 	Home(mux, globalRegistry)
 	ShadowReddit(mux)
 	GenerateStory(mux)
+	Trick(mux)
+	Fantasy(mux)
 
 	log.Println("WebRTC server started on port", webPort)
 	log.Fatal(http.ListenAndServe(webPort, mux))
