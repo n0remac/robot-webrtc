@@ -42,24 +42,14 @@ func main() {
 		log.Println("WEBRTC_DEBUG is OFF – logging endpoint will refuse connections")
 	}
 
-	// Serve static files from the 'web' directory
-	fs := http.FileServer(http.Dir("./web"))
+	// Create a new HTTP server
 	mux := http.NewServeMux()
-
-	mux.Handle("/video/", http.StripPrefix("/video/", fs))
-
 	// create global registry
 	globalRegistry := NewCommandRegistry()
-	
-	withWS("/ws/video", mux, videoSignalling)
-	withWS("/ws/hub",   mux, hubWS(globalRegistry))
-	withWS("/ws/logs",  mux, logSocketWS)
-
-	// Handle the TURN credentials endpoint
-	mux.HandleFunc("/turn-credentials", handleTurnCredentials)
 
 	// Apps
 	Home(mux, globalRegistry)
+	VideoHandler(mux, globalRegistry)
 	ShadowReddit(mux)
 	GenerateStory(mux)
 	Trick(mux)

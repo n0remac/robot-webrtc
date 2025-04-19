@@ -39,6 +39,96 @@ var (
 	coturnTTL    = int64(3600)
 )
 
+func VideoHandler(mux *http.ServeMux, globalRegistry *CommandRegistry) {
+
+	mux.HandleFunc("/video/", VideoPage)
+
+	// Handle the TURN credentials endpoint
+	mux.HandleFunc("/turn-credentials", handleTurnCredentials)
+
+	// Register WebSocket handlers
+	withWS("/ws/video", mux, videoSignalling)
+	withWS("/ws/hub", mux, hubWS(globalRegistry))
+	withWS("/ws/logs", mux, logSocketWS)
+}
+
+func VideoPage(w http.ResponseWriter, r *http.Request) {
+	room := r.URL.Query().Get("room")
+	if room == "" {
+		room = "default"
+	}
+
+	page := DefaultLayout(
+		// load your external CSS
+		Style(
+			Raw(loadFile("video.css")),
+		),
+		// load your external JS (e.g. WebRTC signalling logic)
+		Script(
+			Raw(loadFile("video.js")),
+		),
+		// enable WS via HTMX
+		Attr("hx-ext", "ws"),
+		Attr("ws-connect", "/ws/hub?room="+room),
+
+		// main vertical stack
+		Div(Attrs(map[string]string{
+			"class":      "flex flex-col items-center min-h-screen",
+			"data-theme": "dark", // if you want dark mode like your example
+		}),
+			// join screen
+			Div(
+				Id("join-screen"),
+				Class("mt-24"), // approx. your 100px top margin
+				Input(Attrs(map[string]string{
+					"type":        "text",
+					"id":          "name",
+					"placeholder": "Enter your name",
+					"class":       "border rounded px-2 py-1",
+				})),
+				Button(
+					Id("join-btn"),
+					Class("ml-2 btn"),
+					T("Join"),
+				),
+			),
+
+			// participant view (hidden initially)
+			Div(
+				Id("participant-view"),
+				Attr("style", "display:none;"),
+				Class("mt-6"),
+
+				// video container
+				Div(
+					Id("videos"),
+					Class("flex justify-center flex-wrap space-x-4"),
+				),
+
+				// controls
+				Div(
+					Id("controls"),
+					Class("mt-5 space-x-4"),
+					Button(
+						Id("mute-btn"),
+						Class("btn btn-sm"),
+						T("Mute"),
+					),
+					Button(
+						Id("video-btn"),
+						Class("btn btn-sm"),
+						T("Stop Video"),
+					),
+				),
+			),
+		),
+	)
+
+	w.Header().Set("Content-Type", "text/html")
+	w.WriteHeader(http.StatusOK)
+	w.Write([]byte(page.Render()))
+}
+
 func videoSignalling(conn *websocket.Conn) {
 	defer conn.Close()
 
@@ -62,7 +152,7 @@ func videoSignalling(conn *websocket.Conn) {
 				leaveMessage := Message{Type: "leave", UUID: userUUID}
 				for client := range clients {
 					log.Println("👋 Broadcasting leave message for", userUUID)
-					client.WriteJSON(leaveMessage) 
+					client.WriteJSON(leaveMessage)
 				}
 			}
 			break
