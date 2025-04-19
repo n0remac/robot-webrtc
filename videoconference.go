@@ -102,7 +102,7 @@ func VideoPage(w http.ResponseWriter, r *http.Request) {
 				// video container
 				Div(
 					Id("videos"),
-					Class("flex justify-center flex-wrap space-x-4"),
+					Class("relative flex justify-center items-center w-full h-full"),
 				),
 
 				// controls

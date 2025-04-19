@@ -22,3 +22,32 @@ body {
 #controls {
     margin-top: 20px;
 }
+
+/* 1) Container holds everything in one box */
+#videos {
+    position: relative;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    width: 100%;   /* or whatever fits your layout */
+    height: 100%;
+  }
+  
+  /* 2) Remote video fills the frame */
+  #videos video.remote-video {
+    width: 100%;
+    max-width: 640px;  /* or tailor to your app */
+    height: auto;
+  }
+  
+  /* 3) Local video floats bottom‑right, small */
+  #videos video.local-video {
+    position: absolute;
+    bottom: 1rem;
+    right: 1rem;
+    width: 20%;        /* adjust to taste */
+    max-width: 200px;
+    height: auto;
+    box-shadow: 0 0 0.5rem rgba(105, 105, 105, 0.5);
+    z-index: 10;
+  }

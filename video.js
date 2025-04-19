@@ -135,11 +135,17 @@ async function setupLocalMedia() {
 
 function showLocalVideo() {
     const video = Object.assign(document.createElement('video'), {
+        id: 'local-video',
         srcObject: localStream,
         autoplay: true,
         playsInline: true,
         muted: false,
     });
+    if (Object.keys(peers).length === 0) {
+        video.classList.add('remote-video');
+    } else {
+        video.classList.add('local-video');
+    }
     document.getElementById('videos').appendChild(video);
     Logger.info('local video added');
 }
@@ -311,6 +317,12 @@ function wireUpPeer(pc, uuid) {
 }
 
 function addRemoteStream(stream, uuid) {
+    // if local is still styled as "remote-video", downgrade it to PiP
+    const localVid = document.getElementById('local-video');
+    if (localVid && localVid.classList.contains('remote-video')) {
+        localVid.classList.replace('remote-video', 'local-video');
+    }
+    
     const id = `video-${uuid}`;
     if (document.getElementById(id)) return;
 
@@ -321,6 +333,7 @@ function addRemoteStream(stream, uuid) {
         playsInline: true,
         muted: true
     });
+    video.classList.add('remote-video');
     document.getElementById('videos').appendChild(video);
     Logger.info('remote video added', { peer: uuid });
 }
@@ -354,3 +367,4 @@ function generateUUID() {
         return v.toString(16);
     });
 }
+
