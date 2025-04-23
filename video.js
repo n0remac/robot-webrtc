@@ -1,6 +1,11 @@
 const domainName = window.location.hostname === "localhost" ? "localhost:8080" : "noremac.dev";
 const wsProtocol = window.location.protocol === "https:" ? "wss" : "ws";
 
+const wsUrl =
+  (location.protocol === "https:" ? "wss://" : "ws://")
+  + location.host
+  + "/ws/video";
+
 const Logger = (() => {
     let enabled = false;              // controlled by server
     let wsLog   = null;               // second websocket for log shipping
@@ -151,7 +156,7 @@ function showLocalVideo() {
 }
 
 async function connectWebSocket() {
-    ws = new WebSocket(`${wsProtocol}://${domainName}/ws/video`);
+    ws = new WebSocket(wsUrl);
 
     ws.onmessage = async ({ data }) => {
         const msg = JSON.parse(data);
