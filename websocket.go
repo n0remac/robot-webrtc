@@ -25,8 +25,8 @@ type WebsocketClient struct {
 }
 
 type WebsocketMessage struct {
-	Room    string
-	Content []byte
+	Room    string          `json:"room"`
+	Content json.RawMessage `json:"content"`
 }
 
 type Hub struct {
@@ -125,9 +125,11 @@ func (c *WebsocketClient) readPump() {
 			c.registry.mu.RLock()
 			handler, ok := c.registry.handlers[key]
 			c.registry.mu.RUnlock()
-			if ok {
-				handler(value.(string), &hub, msgMap)
+			if !ok {
+				continue
 			}
+			strVal, _ := value.(string)
+			handler(strVal, &hub, msgMap)
 		}
 	}
 }

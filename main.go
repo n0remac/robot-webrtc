@@ -47,6 +47,8 @@ func main() {
 	// create global registry
 	globalRegistry := NewCommandRegistry()
 
+
+
 	// Apps
 	Home(mux, globalRegistry)
 	VideoHandler(mux, globalRegistry)
@@ -54,6 +56,8 @@ func main() {
 	GenerateStory(mux)
 	Trick(mux)
 	Fantasy(mux)
+
+	go hub.run()
 
 	log.Println("WebRTC server started on port", webPort)
 	log.Fatal(http.ListenAndServe(webPort, mux))

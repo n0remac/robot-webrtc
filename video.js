@@ -4,7 +4,7 @@ const wsProtocol = window.location.protocol === "https:" ? "wss" : "ws";
 const wsUrl =
   (location.protocol === "https:" ? "wss://" : "ws://")
   + location.host
-  + "/ws/video";
+  + "/ws/hub";
 
 const Logger = (() => {
     let enabled = false;              // controlled by server
@@ -83,9 +83,11 @@ const ICE_TIMEOUT_MS = 10000;
 const MAX_RETRIES = 5;
 const retryCounts = {}; 
 
+const ROOM = new URLSearchParams(location.search).get("room") || "default";
+
 window.addEventListener('beforeunload', () => {
     if (ws && ws.readyState === WebSocket.OPEN) {
-        ws.send(JSON.stringify({ type: 'leave', uuid: myUUID }));
+        ws.send(JSON.stringify({ leave: myUUID, room: ROOM }));
         Logger.info('sent leave on unload', { uuid: myUUID });
     }
 });
@@ -167,7 +169,7 @@ async function connectWebSocket() {
     ws.onopen = () => {
         wsReady = true;
         Logger.info('WebSocket open');
-        ws.send(JSON.stringify({ type: 'join', uuid: myUUID }));
+        ws.send(JSON.stringify({ join: myUUID, room: ROOM }));
     };
     ws.onerror = e => Logger.error('WebSocket error', e);
     ws.onclose = e => Logger.warn('WebSocket closed', e);
@@ -180,26 +182,56 @@ function flushBufferedMessages() {
 }
 
 async function handleSignalingMessage(data) {
-    Logger.info('WS msg', data);
-    switch (data.type) {
-        case 'join':
-            if (data.uuid !== myUUID) await createOffer(data.uuid);
-            break;
-        case 'offer':
-            if (!peers[data.uuid]) pendingOffers[data.uuid] = data.offer;
-            await createAnswer(data.uuid, data.offer);
-            break;
-        case 'answer':
-            await setRemoteDescriptionSafely(data.uuid, data.answer);
-            break;
-        case 'candidate':
-            bufferOrApplyCandidate(data.uuid, data.candidate);
-            break;
-        case 'leave':
-            handleUserDisconnect(data.uuid);
-            break;
+    const { type, uuid, offer, answer, candidate } = data;
+    if (uuid === myUUID) return;
+  
+    // **1) Lazily create** a peerConnection for every new uuid
+    if (!peers[uuid]) {
+      peers[uuid] = createPeerConnection(uuid);
     }
-}
+    const pc = peers[uuid];
+  
+    switch (type) {
+      case 'join':
+        // nothing else to do here—the PC is created, and negotiationneeded will fire
+        break;
+  
+      case 'offer': {
+        // polite‐negotiation logic
+        const polite = myUUID < uuid;
+        const collision = pc.makingOffer || pc.signalingState !== 'stable';
+        if (!polite && collision) return;    // impolite side just skips
+        if (collision) {
+          await pc.setLocalDescription({ type: 'rollback' });
+        }
+        await pc.setRemoteDescription(offer);
+        const ans = await pc.createAnswer();
+        await pc.setLocalDescription(ans);
+        ws.send(JSON.stringify({ type: 'answer', uuid: myUUID, to: uuid, answer: ans }));
+        break;
+      }
+  
+      case 'answer':
+        if (!pc.makingOffer && pc.signalingState === 'have-local-offer') {
+          await pc.setRemoteDescription(answer);
+        }
+        break;
+  
+      case 'candidate':
+        try {
+          await pc.addIceCandidate(candidate);
+        } catch (e) {
+          console.warn('ICE candidate failed', e);
+        }
+        break;
+  
+      case 'leave':
+        cleanupPeer(uuid);
+        break;
+    }
+  }
+  
+  
 
 function bufferOrApplyCandidate(uuid, candidate) {
     if (!peers[uuid]) {
@@ -212,15 +244,29 @@ function bufferOrApplyCandidate(uuid, candidate) {
 }
 
 async function setRemoteDescriptionSafely(uuid, answer) {
-    if (!peers[uuid]) return Logger.warn('Answer for unknown peer', { uuid });
-    await peers[uuid].setRemoteDescription(new RTCSessionDescription(answer));
+  const pc = peers[uuid];
+  if (!pc) return Logger.warn('No peer for answer', { uuid });
+
+  // only accept an answer if we’re in have-local-offer
+  if (pc.signalingState !== 'have-local-offer') {
+    Logger.warn('Skipping remote answer in state', { uuid, state: pc.signalingState });
+    return;
+  }
+
+  try {
+    await pc.setRemoteDescription(new RTCSessionDescription(answer));
     Logger.info('remote SDP set', { uuid });
-    if (peers[uuid].queuedCandidates) {
-        for (const c of peers[uuid].queuedCandidates) {
-            await peers[uuid].addIceCandidate(new RTCIceCandidate(c));
-        }
-        peers[uuid].queuedCandidates = [];
+  } catch (err) {
+    Logger.error('remote SDP failed', err);
+  }
+
+  // flush any queued candidates…
+  if (pc.queuedCandidates) {
+    for (const c of pc.queuedCandidates) {
+      await pc.addIceCandidate(new RTCIceCandidate(c));
     }
+    pc.queuedCandidates = [];
+  }
 }
 
 async function createOffer(uuid) {
@@ -233,8 +279,7 @@ async function createOffer(uuid) {
 
     let pc = peers[uuid];
     if (!pc) {
-        pc = new RTCPeerConnection({ iceServers: globalIceServers });
-        wireUpPeer(pc, uuid);
+        pc = createPeerConnection(uuid);
         peers[uuid] = pc;
     }
 
@@ -247,7 +292,11 @@ async function createOffer(uuid) {
 
     const offer = await pc.createOffer();
     await pc.setLocalDescription(offer);
-    ws.send(JSON.stringify({ type: 'offer', uuid, offer }));
+    ws.send(JSON.stringify({
+        offer: offer,
+        uuid:  uuid,           // which peer you're targeting
+        room:  ROOM
+      }));
     Logger.info('offer sent', { to: uuid });
 }
 
@@ -255,8 +304,7 @@ async function createAnswer(uuid, offer) {
     Logger.info('createAnswer', { from: uuid });
     let pc = peers[uuid];
     if (!pc) {
-        pc = new RTCPeerConnection({ iceServers: globalIceServers });
-        wireUpPeer(pc, uuid);
+        pc = createPeerConnection(uuid);
         peers[uuid] = pc;
     }
 
@@ -278,47 +326,8 @@ async function createAnswer(uuid, offer) {
 
     const answer = await pc.createAnswer();
     await pc.setLocalDescription(answer);
-    ws.send(JSON.stringify({ type: 'answer', uuid, answer }));
+    ws.send(JSON.stringify({ answer: answer, uuid: uuid, room: ROOM }));
     Logger.info('answer sent', { to: uuid });
-}
-
-function wireUpPeer(pc, uuid) {
-    if (pc._tracksAdded) return;
-
-    pc.ontrack = (e) => {
-        Logger.info('ontrack', { peer: uuid });
-        addRemoteStream(e.streams[0], uuid);
-    };
-
-    pc.onicecandidate = (e) => {
-        if (e.candidate) {
-            ws.send(JSON.stringify({ type: 'candidate', uuid, candidate: e.candidate }));
-            Logger.info('sent candidate', { to: uuid });
-        }
-    };
-
-    const timeout = setTimeout(() => {
-        if (pc.iceConnectionState !== 'connected' && pc.iceConnectionState !== 'completed') {
-            Logger.warn('ICE timeout, attempting reconnect', { peer: uuid });
-            handleUserDisconnect(uuid);
-            createOffer(uuid);
-        }
-    }, ICE_TIMEOUT_MS);
-
-    pc.oniceconnectionstatechange = () => {
-        Logger.info('ICE state', { peer: uuid, state: pc.iceConnectionState });
-        if (['failed', 'disconnected', 'closed'].includes(pc.iceConnectionState)) {
-            clearTimeout(timeout);
-            handleUserDisconnect(uuid);
-        }
-        if (['connected', 'completed'].includes(pc.iceConnectionState)) {
-            clearTimeout(timeout);
-            retryCounts[uuid] = 0; // reset retry count on success
-        }
-    };
-
-    localStream.getTracks().forEach(t => pc.addTrack(t, localStream));
-    pc._tracksAdded = true;
 }
 
 function addRemoteStream(stream, uuid) {
@@ -373,3 +382,39 @@ function generateUUID() {
     });
 }
 
+
+  
+
+  function createPeerConnection(uuid) {
+    const pc = new RTCPeerConnection({ iceServers: globalIceServers });
+    pc.makingOffer = false;
+    pc.onicecandidate = e => {
+      if (!e.candidate) return;
+      ws.send(JSON.stringify({
+        type:      'candidate',
+        uuid:      myUUID,
+        to:        uuid,
+        candidate: e.candidate
+      }));
+    };
+    pc.onnegotiationneeded = async () => {
+      try {
+        pc.makingOffer = true;
+        const offer = await pc.createOffer();
+        await pc.setLocalDescription(offer);
+        ws.send(JSON.stringify({
+          type:  'offer',
+          uuid:  myUUID,
+          to:    uuid,
+          offer: offer
+        }));
+      } finally {
+        pc.makingOffer = false;
+      }
+    };
+    pc.ontrack = e => addRemoteStream(e.streams[0], uuid);
+    // **add your local tracks**
+    localStream.getTracks().forEach(t => pc.addTrack(t, localStream));
+    return pc;
+  }
+  
