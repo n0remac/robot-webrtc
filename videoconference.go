@@ -30,12 +30,12 @@ var (
 // Message is the payload for WebRTC signalling
 type Message struct {
 	Type      string      `json:"type"`
-	UUID      string      `json:"uuid,omitempty"`
+	From      string      `json:"from,omitempty"`
+	To        string      `json:"to,omitempty"`
 	Offer     interface{} `json:"offer,omitempty"`
 	Answer    interface{} `json:"answer,omitempty"`
 	Candidate interface{} `json:"candidate,omitempty"`
-	Enable    bool        `json:"enable,omitempty"`
-}
+  }
 
 // VideoHandler sets up the HTTP and WebSocket routes for video
 func VideoHandler(mux *http.ServeMux, registry *CommandRegistry) {
@@ -74,27 +74,35 @@ func VideoHandler(mux *http.ServeMux, registry *CommandRegistry) {
 // registerSignallingCommands wires WebRTC commands into the Hub
 func registerSignallingCommands(reg *CommandRegistry) {
 	// "join": announce a new peer
-	reg.RegisterWebsocket("join", func(val string, hub *Hub, data map[string]interface{}) {
+	reg.RegisterWebsocket("join", func(_ string, hub *Hub, data map[string]interface{}) {
 		room := getRoom(data)
-		broadcastWebRTC(hub, room, Message{Type: "join", UUID: val})
-	})
+		from := data["from"].(string)
+		broadcastWebRTC(hub, room, Message{Type:"join", From:from})
+	  })
 
 	// "offer": forward an SDP offer
 	reg.RegisterWebsocket("offer", func(_ string, hub *Hub, data map[string]interface{}) {
 		room := getRoom(data)
+		from := data["from"].(string)
+		to   := data["to"].(string)
 		broadcastWebRTC(hub, room, Message{
-			Type:  "offer",
-			UUID:  data["uuid"].(string),
-			Offer: data["offer"],
+		  Type:      "offer",
+		  From:      from,
+		  To:        to,
+		  Offer:     data["offer"],
 		})
-	})
+	  })
+	  
 
 	// "answer": forward an SDP answer
 	reg.RegisterWebsocket("answer", func(_ string, hub *Hub, data map[string]interface{}) {
 		room := getRoom(data)
+		from := data["from"].(string)
+		to   := data["to"].(string)
 		broadcastWebRTC(hub, room, Message{
 			Type:   "answer",
-			UUID:   data["uuid"].(string),
+			From:      from,
+			To:        to,
 			Answer: data["answer"],
 		})
 	})
@@ -102,18 +110,22 @@ func registerSignallingCommands(reg *CommandRegistry) {
 	// "candidate": forward ICE candidates
 	reg.RegisterWebsocket("candidate", func(_ string, hub *Hub, data map[string]interface{}) {
 		room := getRoom(data)
+		from := data["from"].(string)
+		to   := data["to"].(string)
 		broadcastWebRTC(hub, room, Message{
 			Type:      "candidate",
-			UUID:      data["uuid"].(string),
+			From:      from,
+			To:        to,
 			Candidate: data["candidate"],
 		})
 	})
 
 	// "leave": notify peers that someone has left
-	reg.RegisterWebsocket("leave", func(val string, hub *Hub, data map[string]interface{}) {
+	reg.RegisterWebsocket("leave", func(_ string, hub *Hub, data map[string]interface{}) {
 		room := getRoom(data)
-		broadcastWebRTC(hub, room, Message{Type: "leave", UUID: val})
-	})
+		from := data["from"].(string)
+		broadcastWebRTC(hub, room, Message{Type:"leave", From:from})
+	  })
 }
 
 // getRoom extracts the room name from incoming WS data
