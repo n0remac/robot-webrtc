@@ -79,6 +79,7 @@ window.addEventListener('beforeunload', () => {
             from: myUUID,
             room: ROOM }));
         Logger.info('sent leave on unload', { uuid: myUUID });
+        ws.close();
     }
 });
 
@@ -175,6 +176,8 @@ async function connectWebSocket() {
     ws.onclose = (e) => {
       if (e.code === 1006) {
         Logger.error('WebSocket closed abnormally', { code: e.code, reason: e.reason });
+        Logger.info('Trying to reconnect...');
+        setTimeout(connectWebSocket, 1000);
       } else {
         Logger.info('WebSocket closed', { code: e.code, reason: e.reason });
       }

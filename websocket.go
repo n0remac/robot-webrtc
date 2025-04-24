@@ -124,16 +124,20 @@ func (c *WebsocketClient) readPump() {
 
 		delete(msgMap, "HEADERS")
 		for key, value := range msgMap {
-			c.registry.mu.RLock()
-			handler, ok := c.registry.handlers[key]
-			c.registry.mu.RUnlock()
-			if !ok {
-				log.Printf("[WARN] unknown command: %s", key)
-				continue
+			if key == "from" || key == "to" || key == "room" {
+				continue // skip non-command keys
+			} else {
+				c.registry.mu.RLock()
+				handler, ok := c.registry.handlers[key]
+				c.registry.mu.RUnlock()
+				if !ok {
+					log.Printf("[WARN] unknown command: %s", key)
+					continue
+				}
+				strVal, _ := value.(string)
+				logInfo("dispatching command", map[string]interface{}{"cmd": key, "from": strVal, "room": c.room})
+				handler(strVal, &hub, msgMap)
 			}
-			strVal, _ := value.(string)
-			logInfo("dispatching command", map[string]interface{}{"cmd": key, "from": strVal, "room": c.room})
-			handler(strVal, &hub, msgMap)
 		}
 	}
 }

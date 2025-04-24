@@ -70,6 +70,7 @@ async function runWebRTCJoinFlowTest(deviceA, deviceB, room, nameA, nameB) {
   await expect(pageA.locator('.remote-video')).toBeVisible();
   await expect(pageB.locator('.remote-video')).toBeVisible();
 
+  
   await browser.close();
 }
 
