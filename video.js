@@ -124,7 +124,7 @@ async function setupLocalMedia() {
         localStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
         Logger.info('gUM success');
     } catch (err) {
-        Logger.error('getUserMedia failed', err);
+        Logger.error('getUserMedia failed', { message: err.message, name: err.name });
         throw err;
     }
 }
@@ -172,7 +172,13 @@ async function connectWebSocket() {
     };
   
     ws.onerror = e => Logger.error('WebSocket error', e);
-    ws.onclose = e => Logger.warn('WebSocket closed', e);
+    ws.onclose = (e) => {
+      if (e.code === 1006) {
+        Logger.error('WebSocket closed abnormally', { code: e.code, reason: e.reason });
+      } else {
+        Logger.info('WebSocket closed', { code: e.code, reason: e.reason });
+      }
+    };
   }
 
 

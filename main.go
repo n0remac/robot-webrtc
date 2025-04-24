@@ -15,21 +15,19 @@ const (
 var upgrader = websocket.Upgrader{
 	CheckOrigin: func(r *http.Request) bool {
 		origin := r.Header.Get("Origin")
-
-		// Define allowed origins. In production, only noremac.dev is allowed.
-		allowedOrigins := []string{"https://noremac.dev"}
-
-		// For local development, add local origins.
+	
+		// Always allow empty origin (Playwright often omits it)
+		if origin == "" {
+			return true
+		}
+	
+		// Accept any origin in non-production
 		if os.Getenv("ENVIRONMENT") != "production" {
-			allowedOrigins = append(allowedOrigins, "http://localhost"+webPort, "http://127.0.0.1"+webPort)
+			return true
 		}
-
-		for _, allowed := range allowedOrigins {
-			if origin == allowed {
-				return true
-			}
-		}
-		return false
+	
+		// Default production restriction
+		return origin == "https://noremac.dev"
 	},
 	ReadBufferSize:  1024,
 	WriteBufferSize: 1024,
@@ -46,8 +44,6 @@ func main() {
 	mux := http.NewServeMux()
 	// create global registry
 	globalRegistry := NewCommandRegistry()
-
-
 
 	// Apps
 	Home(mux, globalRegistry)

@@ -1,3 +1,6 @@
 /books/*
 /serverlogs/*
 /data/*
+test-results/*
+*/test-results/*
+tests/node_modules/*
