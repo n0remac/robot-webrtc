@@ -210,11 +210,15 @@ function addRemoteStream(stream, uuid) {
 function handleUserDisconnect(uuid) {
     Logger.info('disconnecting peer', { peer: uuid });
     const video = document.getElementById(`video-${uuid}`);
+    if (!video) Logger.warn('no video found for peer', { peer: uuid });
     if (video) video.remove();
     if (peers[uuid]) {
         peers[uuid].close();
         delete peers[uuid];
-    }
+        Logger.info('closing peer connection', { peer: uuid });
+      } else {
+        Logger.warn('no peer connection found', { peer: uuid });
+      }
 }
 
 function toggleMute() {
@@ -334,8 +338,9 @@ function createPeerConnection(peerId) {
               console.warn('failed to add ICE candidate', e);
             }
           }
-        } else if (msg.leave) {
-          handleUserDisconnect(peerId);
+        } else if (msg.leave || msg.type === 'leave') {
+          Logger.info('handling leave signal', { from: msg.from });
+          handleUserDisconnect(msg.from);
         }
       }
   
