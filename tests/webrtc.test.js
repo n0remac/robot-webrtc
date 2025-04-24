@@ -1,5 +1,4 @@
 const { test, expect, devices, chromium } = require('@playwright/test');
-const { assert } = require('console');
 
 // ✅ All device pairings you want to test
 const scenarios = [
@@ -32,7 +31,6 @@ const scenarios = [
 // ✅ Reusable test function
 async function runWebRTCJoinFlowTest(deviceA, deviceB, room, nameA, nameB) {
   const BASE_URL = `http://localhost:8080/video`;
-  // const BASE_URL = `https://noremac.dev/video`;
   const browser = await chromium.launch({ headless: false });
 
   const launchContext = async (device) =>
@@ -70,7 +68,21 @@ async function runWebRTCJoinFlowTest(deviceA, deviceB, room, nameA, nameB) {
   await expect(pageA.locator('.remote-video')).toBeVisible();
   await expect(pageB.locator('.remote-video')).toBeVisible();
 
-  
+  // ❌ Close pageB (simulate disconnect)
+  await pageB.evaluate(() => {
+    window.dispatchEvent(new Event('beforeunload'));
+  });
+
+  // ⏳ Wait for the remaining page to update
+  await pageA.waitForTimeout(2000);
+
+  await contextB.close();
+
+  // ✅ Check that the remote video was removed from pageA
+  const remoteCount = await pageA.locator('.remote-video').count();
+  expect(remoteCount).toBe(0);
+
+  await contextA.close();
   await browser.close();
 }
 
