@@ -31,8 +31,8 @@ const scenarios = [
 
 // ✅ Reusable test function
 async function runWebRTCJoinFlowTest(deviceA, deviceB, room, nameA, nameB) {
-  // const BASE_URL = `http://localhost:8080/video`;
-  const BASE_URL = `https://noremac.dev/video`;
+  const BASE_URL = `http://localhost:8080/video`;
+  // const BASE_URL = `https://noremac.dev/video`;
   const browser = await chromium.launch({ headless: false });
 
   const launchContext = async (device) =>
@@ -54,6 +54,7 @@ async function runWebRTCJoinFlowTest(deviceA, deviceB, room, nameA, nameB) {
   const pageB = await contextB.newPage();
 
   await pageA.goto(BASE_URL);
+  await pageA.waitForTimeout(500);
   await pageB.goto(BASE_URL);
 
   await pageA.fill('#name', nameA);

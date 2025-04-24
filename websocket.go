@@ -3,7 +3,7 @@ package main
 import (
 	"encoding/json"
 	"log"
-	"net/url"
+	"net/http"
 	"sync"
 
 	"github.com/gorilla/websocket"
@@ -102,6 +102,7 @@ func (h *Hub) run() {
 
 func (c *WebsocketClient) readPump() {
 	defer func() {
+		logInfo("client disconnected", map[string]interface{}{"room": c.room})
 		hub.unregister <- c
 		c.conn.Close()
 	}()
@@ -109,60 +110,58 @@ func (c *WebsocketClient) readPump() {
 	for {
 		_, message, err := c.conn.ReadMessage()
 		if err != nil {
-			log.Println("ReadMessage error:", err)
+			logError("read error", err, map[string]interface{}{"room": c.room})
 			break
 		}
 
 		var msgMap map[string]interface{}
-		err = json.Unmarshal(message, &msgMap)
-		if err != nil {
-			log.Println("JSON Unmarshal error:", err)
+		if err := json.Unmarshal(message, &msgMap); err != nil {
+			logError("JSON unmarshal failed", err, map[string]interface{}{"raw": string(message)})
 			return
 		}
-		delete(msgMap, "HEADERS")
 
+		logInfo("message received", msgMap)
+
+		delete(msgMap, "HEADERS")
 		for key, value := range msgMap {
 			c.registry.mu.RLock()
 			handler, ok := c.registry.handlers[key]
 			c.registry.mu.RUnlock()
 			if !ok {
+				log.Printf("[WARN] unknown command: %s", key)
 				continue
 			}
 			strVal, _ := value.(string)
+			logInfo("dispatching command", map[string]interface{}{"cmd": key, "from": strVal, "room": c.room})
 			handler(strVal, &hub, msgMap)
 		}
 	}
 }
 
 func (c *WebsocketClient) writePump() {
-	defer c.conn.Close()
+	defer func() {
+		logInfo("writePump closed", map[string]interface{}{"room": c.room})
+		c.conn.Close()
+	}()
+
 	for message := range c.send {
 		err := c.conn.WriteMessage(websocket.TextMessage, message)
 		if err != nil {
-			log.Println("WriteMessage error:", err)
+			logError("write error", err, map[string]interface{}{"room": c.room})
 			break
 		}
+		logInfo("message sent", map[string]interface{}{"length": len(message), "room": c.room})
 	}
 }
 
-func hubWS(globalRegistry *CommandRegistry) func(*websocket.Conn) {
-	return func(conn *websocket.Conn) {
-		// pull ?room=<name> from the query
-		room := "default"
-		if q, err := url.ParseQuery(conn.LocalAddr().String()); err == nil {
-			if r := q.Get("room"); r != "" {
-				room = r
-			}
+func withWS(path string, mux *http.ServeMux, handler func(*websocket.Conn)) {
+	mux.HandleFunc(path, func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			log.Printf("WS upgrade %s → %v", path, err)
+			return
 		}
-
-		client := &WebsocketClient{
-			conn:     conn,
-			send:     make(chan []byte, 256),
-			registry: globalRegistry,
-			room:     room,
-		}
-		hub.register <- client
-		go client.writePump()
-		client.readPump()
-	}
+		log.Printf("WS %s connected", path)
+		handler(conn) // delegate to feature‑specific logic
+	})
 }
