@@ -120,11 +120,20 @@ func (c *WebsocketClient) readPump() {
 			return
 		}
 
-		typ := msgMap["type"].(string)
-		handler, ok := c.registry.handlers[typ]
+		typ := msgMap["type"]
+		if typ == nil {
+			logError("missing type", nil, map[string]interface{}{"raw": string(message)})
+			continue
+		}
+		typStr, ok := typ.(string)
+		if !ok {
+			logError("type not string", nil, map[string]interface{}{"raw": string(message)})
+			continue
+		}
+		handler, ok := c.registry.handlers[typStr]
 
 		if !ok {
-			logInfo("unknown command", map[string]interface{}{"cmd": typ, "room": c.room})
+			logInfo("unknown command", map[string]interface{}{"cmd": typStr, "room": c.room})
 			continue
 		}
 		strVal, _ := msgMap["from"].(string)
