@@ -120,25 +120,15 @@ func (c *WebsocketClient) readPump() {
 			return
 		}
 
-		logInfo("message received", msgMap)
+		typ := msgMap["type"].(string)
+		handler, ok := c.registry.handlers[typ]
 
-		delete(msgMap, "HEADERS")
-		for key, value := range msgMap {
-			if key == "from" || key == "to" || key == "room" {
-				continue // skip non-command keys
-			} else {
-				c.registry.mu.RLock()
-				handler, ok := c.registry.handlers[key]
-				c.registry.mu.RUnlock()
-				if !ok {
-					log.Printf("[WARN] unknown command: %s", key)
-					continue
-				}
-				strVal, _ := value.(string)
-				logInfo("dispatching command", map[string]interface{}{"cmd": key, "from": strVal, "room": c.room})
-				handler(strVal, &hub, msgMap)
-			}
+		if !ok {
+			logInfo("unknown command", map[string]interface{}{"cmd": typ, "room": c.room})
+			continue
 		}
+		strVal, _ := msgMap["from"].(string)
+		handler(strVal, &hub, msgMap)
 	}
 }
 
@@ -154,7 +144,6 @@ func (c *WebsocketClient) writePump() {
 			logError("write error", err, map[string]interface{}{"room": c.room})
 			break
 		}
-		logInfo("message sent", map[string]interface{}{"length": len(message), "room": c.room})
 	}
 }
 

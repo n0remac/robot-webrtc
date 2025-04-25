@@ -75,7 +75,8 @@ const peers = {};
 window.addEventListener('beforeunload', () => {
     if (ws && ws.readyState === WebSocket.OPEN) {
         ws.send(JSON.stringify({ 
-            leave: myUUID, 
+            type: 'leave',
+            leave: myUUID,
             from: myUUID,
             room: ROOM }));
         Logger.info('sent leave on unload', { uuid: myUUID });
@@ -153,7 +154,8 @@ async function connectWebSocket() {
     ws.onopen = () => {
       Logger.info('WebSocket open');
       ws.send(JSON.stringify({
-        join: myUUID,   // ← server’s “join” command
+        type: 'join',
+        join: myUUID,
         from: myUUID,
         room: ROOM
       }));
@@ -261,6 +263,7 @@ function createPeerConnection(peerId) {
         await pc.setLocalDescription(offer);
   
         ws.send(JSON.stringify({
+          type: 'offer',
           offer: pc.localDescription,
           from:  myUUID,
           to:    peerId,
@@ -276,6 +279,7 @@ function createPeerConnection(peerId) {
     pc.onicecandidate = e => {
       if (!e.candidate) return;
       ws.send(JSON.stringify({
+        type: 'candidate',
         candidate: e.candidate,
         from:      myUUID,
         to:        peerId,
@@ -288,6 +292,7 @@ function createPeerConnection(peerId) {
         pc.createOffer({ iceRestart: true })
           .then(o => pc.setLocalDescription(o))
           .then(() => ws.send(JSON.stringify({
+            type: 'offer',
             offer: pc.localDescription,
             from:  myUUID,
             to:    peerId,
@@ -299,27 +304,30 @@ function createPeerConnection(peerId) {
     pc.ontrack = e => addRemoteStream(e.streams[0], peerId);
   
     pc.handleSignal = async msg => {
-        if (msg.offer) {
-          const collision = pc.makingOffer || pc.signalingState !== 'stable';
-          pc.ignoreOffer = !polite && collision;
-          if (pc.ignoreOffer) return;
-          if (collision) await pc.setLocalDescription({ type: 'rollback' });
-  
-          await pc.setRemoteDescription(msg.offer);
-          // flush any queued ICE candidates
-          pc.queuedCandidates.forEach(c => pc.addIceCandidate(c));
-          pc.queuedCandidates = [];
-  
-          const answer = await pc.createAnswer();
-          await pc.setLocalDescription(answer);
-          ws.send(JSON.stringify({
-            answer: pc.localDescription,
-            from:   myUUID,
-            to:     peerId,
-            room:   ROOM
-          }));
-          Logger.info('answer sent', { to: peerId });
-        } else if (msg.answer) {
+        switch (msg.type) {
+          case 'offer':
+            const collision = pc.makingOffer || pc.signalingState !== 'stable';
+            pc.ignoreOffer = !polite && collision;
+            if (pc.ignoreOffer) return;
+            if (collision) await pc.setLocalDescription({ type: 'rollback' });
+    
+            await pc.setRemoteDescription(msg.offer);
+            // flush any queued ICE candidates
+            pc.queuedCandidates.forEach(c => pc.addIceCandidate(c));
+            pc.queuedCandidates = [];
+    
+            const answer = await pc.createAnswer();
+            await pc.setLocalDescription(answer);
+            ws.send(JSON.stringify({
+              type:   'answer',
+              answer: pc.localDescription,
+              from:   myUUID,
+              to:     peerId,
+              room:   ROOM
+            }));
+            Logger.info('answer sent', { to: peerId });
+            break;
+        case 'answer':
           if (!pc.makingOffer && pc.signalingState === 'have-local-offer') {
             await pc.setRemoteDescription(msg.answer);
             // flush queued candidates
@@ -327,7 +335,8 @@ function createPeerConnection(peerId) {
             pc.queuedCandidates = [];
             Logger.info('remote SDP applied', { peer: peerId });
           }
-        } else if (msg.candidate) {
+          break;
+        case 'candidate':
           // if remoteDescription isn’t set yet, queue it
           if (!pc.remoteDescription) {
             pc.queuedCandidates.push(msg.candidate);
@@ -338,15 +347,14 @@ function createPeerConnection(peerId) {
               console.warn('failed to add ICE candidate', e);
             }
           }
-        } else if (msg.leave || msg.type === 'leave') {
+          break;
+        case 'leave':
           Logger.info('handling leave signal', { from: msg.from });
           handleUserDisconnect(msg.from);
-        }
+          break;
       }
-  
-    // add our local tracks to kick off negotiationneeded
-    localStream.getTracks().forEach(t => pc.addTrack(t, localStream));
-    return pc;
   }
-  
-  
+  // add our local tracks to kick off negotiationneeded
+  localStream.getTracks().forEach(t => pc.addTrack(t, localStream));
+  return pc;
+}
