@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"net"
+	"net/http"
 	"os"
 	"os/exec"
 	"os/signal"
@@ -14,6 +15,7 @@ import (
 
 	"github.com/gorilla/websocket"
 	"github.com/pion/rtp"
+	"github.com/pion/rtp/codecs"
 	"github.com/pion/webrtc/v4"
 )
 
@@ -26,8 +28,8 @@ var (
 
 func main() {
 	// --- CLI flags ---
-	// server := flag.String("server", "ws://localhost:8080/ws/hub", "signaling server URL")
-	server := flag.String("server", "wss://noremac.dev/ws/hub", "signaling server URL")
+	server := flag.String("server", "ws://localhost:8080/ws/hub", "signaling server URL")
+	// server := flag.String("server", "wss://noremac.dev/ws/hub", "signaling server URL")
 
 	file := flag.String("file", "", "path to a local video file to stream instead of webcam")
 	room := flag.String("room", "default", "room name")
@@ -40,48 +42,35 @@ func main() {
 	myID := *id
 	log.Printf("My ID: %s", myID)
 
-	// decide which ffmpeg launcher to use:
-	if *file != "" {
-		// stream a file (at realtime) → two separate RTP streams
-		go runFFmpegFileCLI(
-			*file,
-			"rtp://127.0.0.1:5004",
-			map[string]string{
-				"c:v":    "libx264",
-				"preset": "ultrafast",
-				"tune":   "zerolatency",
-				"an":     "", // disable audio here
-				"f":      "rtp",
-			},
-		)
-		go runFFmpegFileCLI(
-			*file,
-			"rtp://127.0.0.1:5006",
-			map[string]string{
-				"c:a": "libopus",
-				"vn":  "", // disable video here
-				"f":   "rtp",
-			},
-		)
-	} else {
-		// your existing webcam + mic
-		go runFFmpegCLI(
-			"/dev/video0", "v4l2", 30, "640x480",
-			"rtp://127.0.0.1:5004",
-			map[string]string{"c:v": "libx264", "preset": "ultrafast", "tune": "zerolatency", "an": "", "f": "rtp"},
-		)
-		go runFFmpegCLI(
-			"default", "alsa", 0, "",
-			"rtp://127.0.0.1:5006",
-			map[string]string{"c:a": "libopus", "vn": "", "f": "rtp"},
-		)
-	}
-
 	// --- 2) Prepare static‐RTP tracks ---
 	m := webrtc.MediaEngine{}
-	if err := m.RegisterDefaultCodecs(); err != nil {
-		log.Fatalf("RegisterDefaultCodecs: %v", err)
-	}
+
+	// Only H264 @ PT 96
+	m.RegisterCodec(
+		webrtc.RTPCodecParameters{
+			RTPCodecCapability: webrtc.RTPCodecCapability{
+				MimeType:    webrtc.MimeTypeH264,
+				ClockRate:   90000,
+				SDPFmtpLine: "packetization-mode=1;profile-level-id=42e01f",
+			},
+			PayloadType: 109,
+		},
+		webrtc.RTPCodecTypeVideo,
+	)
+
+	// Only Opus @ PT 97
+	m.RegisterCodec(
+		webrtc.RTPCodecParameters{
+			RTPCodecCapability: webrtc.RTPCodecCapability{
+				MimeType:  webrtc.MimeTypeOpus,
+				ClockRate: 48000,
+				Channels:  2,
+			},
+			PayloadType: 111,
+		},
+		webrtc.RTPCodecTypeAudio,
+	)
+
 	api := webrtc.NewAPI(webrtc.WithMediaEngine(&m))
 
 	var err error
@@ -98,13 +87,12 @@ func main() {
 		log.Fatalf("NewTrackLocalStaticRTP(audio): %v", err)
 	}
 
-	// pump RTP into tracks
-	go pumpRTP("[::]:5004", videoTrack)
-	go pumpRTP("[::]:5006", audioTrack)
-
 	// --- 3) Connect to signaling server ---
 	wsURL := fmt.Sprintf("%s?room=%s", *server, *room)
-	ws, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
+	headers := http.Header{
+		"Origin": []string{"https://noremac.dev"},
+	}
+	ws, _, err := websocket.DefaultDialer.Dial(wsURL, headers)
 	if err != nil {
 		log.Fatalf("WebSocket dial error: %v", err)
 	}
@@ -112,7 +100,7 @@ func main() {
 
 	// send our join message
 	ws.WriteJSON(map[string]interface{}{
-		"join": myID, "from": myID, "room": *room,
+		"join": myID, "from": myID, "room": *room, "type": "join",
 	})
 
 	// read incoming messages
@@ -127,6 +115,53 @@ func main() {
 		}
 	}()
 
+	// decide which ffmpeg launcher to use:
+	if *file != "" {
+		// stream a file (at realtime) → two separate RTP streams
+		// Video‐only RTP + SDP
+		go runFFmpegFileCLI(
+			*file,
+			"rtp://127.0.0.1:5004",
+			map[string]string{
+				"y":            "",                    // overwrite output file
+				"map":          "0:v",                 // pick only the video stream
+				"c:v":          "copy",                // don’t re-encode, preserve SPS/PPS
+				"bsf:v":        "h264_mp4toannexb",    // Annex-B NALUs
+				"payload_type": "109",                 // must match your SDP mapping
+				"f":            "rtp",                 // RTP muxer
+				"sdp_file":     "video.sdp",           // write out video.sdp
+				"sdp_flags":    "+add_parameter_sets", // inject SPS/PPS into SDP
+			},
+		)
+
+		// Audio‐only RTP + SDP
+		go runFFmpegFileCLI(
+			*file,
+			"rtp://127.0.0.1:5006",
+			map[string]string{
+				"y":            "",          // overwrite output file
+				"map":          "0:a",       // pick only the audio stream
+				"c:a":          "libopus",   // encode audio
+				"payload_type": "111",       // audio payload type
+				"f":            "rtp",       // RTP muxer
+				"sdp_file":     "audio.sdp", // write out audio.sdp
+			},
+		)
+
+	} else {
+		// your existing webcam + mic
+		go runFFmpegCLI(
+			"/dev/video0", "v4l2", 30, "640x480",
+			"rtp://127.0.0.1:5004",
+			map[string]string{"c:v": "libx264", "preset": "ultrafast", "tune": "zerolatency", "an": "", "f": "rtp"},
+		)
+		go runFFmpegCLI(
+			"default", "alsa", 0, "",
+			"rtp://127.0.0.1:5006",
+			map[string]string{"c:a": "libopus", "vn": "", "f": "rtp"},
+		)
+	}
+
 	// wait for CTRL+C
 	sig := make(chan os.Signal, 1)
 	signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM)
@@ -138,7 +173,7 @@ func runFFmpegCLI(input, format string, fps int, size, output string, outArgs ma
 	// start with global flags
 	args := []string{
 		"-hide_banner",
-		"-loglevel", "debug",
+		"-loglevel", "warning",
 		"-f", format,
 	}
 	// video-specific options
@@ -180,8 +215,9 @@ func runFFmpegCLI(input, format string, fps int, size, output string, outArgs ma
 func runFFmpegFileCLI(inputFile, output string, outArgs map[string]string) {
 	// global + -re + input
 	args := []string{
+		"-y",
 		"-hide_banner",
-		"-loglevel", "debug",
+		"-loglevel", "warning",
 		"-re", // read input “in realtime”
 		"-i", inputFile,
 	}
@@ -198,7 +234,7 @@ func runFFmpegFileCLI(inputFile, output string, outArgs map[string]string) {
 	}
 	args = append(args, output)
 
-	log.Printf("running ffmpeg (file) %v", args)
+	log.Printf("running ffmpeg %v", args)
 	cmd := exec.Command("ffmpeg", args...)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
@@ -208,12 +244,13 @@ func runFFmpegFileCLI(inputFile, output string, outArgs map[string]string) {
 }
 
 // pumpRTP reads RTP packets from addr and writes them into track
-func pumpRTP(addr string, track *webrtc.TrackLocalStaticRTP) {
-	pcaddr, err := net.ResolveUDPAddr("udp", addr)
+func pumpRTP(addr string, track *webrtc.TrackLocalStaticRTP, payloadType uint8) {
+	log.Printf("▶ pumpRTP listening on %s (payload %d) → track %s", addr, payloadType, track.ID())
+	udpAddr, err := net.ResolveUDPAddr("udp", addr)
 	if err != nil {
 		log.Fatalf("ResolveUDPAddr %s: %v", addr, err)
 	}
-	conn, err := net.ListenUDP("udp", pcaddr)
+	conn, err := net.ListenUDP("udp", udpAddr)
 	if err != nil {
 		log.Fatalf("ListenUDP %s: %v", addr, err)
 	}
@@ -223,15 +260,28 @@ func pumpRTP(addr string, track *webrtc.TrackLocalStaticRTP) {
 	for {
 		n, _, err := conn.ReadFrom(buf)
 		if err != nil {
+			log.Printf("pumpRTP(%s) read error: %v", addr, err)
 			return
 		}
+
+		// log.Printf("📦 pumpRTP(%s) got %d bytes from %s", addr, n, src)
 		var pkt rtp.Packet
 		if err := pkt.Unmarshal(buf[:n]); err != nil {
+			log.Printf("pumpRTP(%s) unmarshal error: %v", addr, err)
 			continue
 		}
-		if err := track.WriteRTP(&pkt); err != nil {
-			log.Printf("track.WriteRTP error: %v", err)
-			return
+
+		// force the correct PT
+		pkt.Header.PayloadType = payloadType
+
+		// retry until SRTP is ready
+		for {
+			if err := track.WriteRTP(&pkt); err != nil {
+				log.Printf("pumpRTP(%s) WriteRTP error (will retry): %v", addr, err)
+				time.Sleep(50 * time.Millisecond)
+				continue
+			}
+			break
 		}
 	}
 }
@@ -258,6 +308,9 @@ func handleSignal(ws *websocket.Conn, api *webrtc.API, myID, room string, msg ma
 		pc := createPeerConnection(api, myID, from, room, ws)
 		peers[from] = pc
 		sendOffer(ws, pc, myID, from, room)
+		log.Println("–––– LOCAL SDP (answer) ––––")
+		log.Println(pc.LocalDescription().SDP)
+		log.Println("–––––––––––––––––––––––––––")
 
 	case "offer":
 		// incoming offer → create or reuse PC, set remote, then answer
@@ -285,6 +338,10 @@ func handleSignal(ws *websocket.Conn, api *webrtc.API, myID, room string, msg ma
 			"to":     from,
 			"room":   room,
 		})
+
+		log.Println("–––– LOCAL SDP (answer) ––––")
+		log.Println(pc.LocalDescription().SDP)
+		log.Println("–––––––––––––––––––––––––––")
 
 	case "answer":
 		// incoming answer → finish handshake
@@ -330,6 +387,80 @@ func createPeerConnection(
 		log.Fatalf("AddTrack audio: %v", err)
 	}
 
+	go func() {
+		f, _ := os.Create("out.h264")
+		defer f.Close()
+		pc.OnTrack(func(track *webrtc.TrackRemote, _ *webrtc.RTPReceiver) {
+			mime := track.Codec().MimeType
+			var f *os.File
+			var err error
+
+			switch mime {
+			case webrtc.MimeTypeH264:
+				f, err = os.Create("out.h264")
+			case webrtc.MimeTypeVP8:
+				f, err = os.Create("out.vp8")
+			case webrtc.MimeTypeOpus:
+				f, err = os.Create("out.opus")
+			default:
+				log.Printf("Skipping unsupported codec %s", mime)
+				return
+			}
+			if err != nil {
+				log.Fatalf("failed to open dump file: %v", err)
+			}
+			defer f.Close()
+
+			switch mime {
+			case webrtc.MimeTypeH264:
+				depkt := &codecs.H264Packet{}
+				for {
+					pkt, _, err := track.ReadRTP()
+					if err != nil {
+						return
+					}
+					nalus, err := depkt.Unmarshal(pkt.Payload)
+					if err != nil {
+						continue
+					}
+					for _, nalu := range nalus {
+						f.Write([]byte{0, 0, 0, 1})
+						f.Write([]byte{nalu})
+					}
+				}
+
+			case webrtc.MimeTypeVP8:
+				depkt := &codecs.VP8Packet{}
+				for {
+					pkt, _, err := track.ReadRTP()
+					if err != nil {
+						return
+					}
+					frame, err := depkt.Unmarshal(pkt.Payload)
+					if err != nil {
+						continue
+					}
+					f.Write(frame)
+				}
+
+			case webrtc.MimeTypeOpus:
+				for {
+					pkt, _, err := track.ReadRTP()
+					if err != nil {
+						return
+					}
+					// Opus RTP payloads can be written raw; you can later wrap them in an Ogg container.
+					f.Write(pkt.Payload)
+				}
+			}
+		})
+
+	}()
+
+	// pump RTP into tracks
+	go pumpRTP("[::]:5004", videoTrack, 109)
+	go pumpRTP("[::]:5006", audioTrack, 111)
+
 	// when we generate ICE, send it to the peer
 	pc.OnICECandidate(func(c *webrtc.ICECandidate) {
 		if c == nil {
@@ -343,6 +474,13 @@ func createPeerConnection(
 			"to":        peerID,
 			"room":      room,
 		})
+	})
+
+	pc.OnICEConnectionStateChange(func(s webrtc.ICEConnectionState) {
+		log.Printf("🔗 ICE state with %s: %s", peerID, s.String())
+	})
+	pc.OnConnectionStateChange(func(s webrtc.PeerConnectionState) {
+		log.Printf("🏓 PeerConnection state with %s: %s", peerID, s.String())
 	})
 
 	return pc

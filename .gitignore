@@ -4,3 +4,7 @@
 test-results/*
 */test-results/*
 tests/node_modules/*
+webrtc/*.sdp
+webrtc/*.h264
+webrtc/*.opus
+webrtc/*.vp8

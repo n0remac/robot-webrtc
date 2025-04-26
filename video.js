@@ -186,8 +186,19 @@ async function connectWebSocket() {
     };
   }
 
+function addAudioStream(stream, uuid) {
+  console.log("✅ addAudioStream fired:", stream);
+  const id = `audio-${uuid}`;
+  if (document.getElementById(id)) return;
+  const audio = Object.assign(
+    document.createElement('audio'),
+    { id, srcObject: stream, autoplay: true }
+  );
+  document.body.appendChild(audio);
+}
 
-function addRemoteStream(stream, uuid) {
+  
+function addVideoStream(stream, uuid) {
     // if local is still styled as "remote-video", downgrade it to PiP
     const localVid = document.getElementById('local-video');
     if (localVid && localVid.classList.contains('remote-video')) {
@@ -253,6 +264,16 @@ function createPeerConnection(peerId) {
   
     // buffer any early ICE candidates here
     pc.queuedCandidates = [];
+
+    pc.ontrack = ({ track, streams }) => {
+      console.log("✅ ontrack fired:", event.track.kind);
+      const stream = streams[0];
+      if (track.kind === 'video') {
+        addVideoStream(stream, peerId);
+      } else if (track.kind === 'audio') {
+        addAudioStream(stream, peerId);
+      }
+    };
   
     pc.onnegotiationneeded = async () => {
       if (negotiating) return;
@@ -300,8 +321,6 @@ function createPeerConnection(peerId) {
           })));
       }
     };
-  
-    pc.ontrack = e => addRemoteStream(e.streams[0], peerId);
   
     pc.handleSignal = async msg => {
         switch (msg.type) {
