@@ -3,6 +3,8 @@ package main
 import (
 	"flag"
 	"fmt"
+	"image"
+	"image/color"
 	"log"
 	"net"
 	"net/http"
@@ -15,8 +17,8 @@ import (
 
 	"github.com/gorilla/websocket"
 	"github.com/pion/rtp"
-	"github.com/pion/rtp/codecs"
 	"github.com/pion/webrtc/v4"
+	"gocv.io/x/gocv"
 )
 
 // global state
@@ -28,9 +30,9 @@ var (
 
 func main() {
 	// --- CLI flags ---
-	server := flag.String("server", "ws://localhost:8080/ws/hub", "signaling server URL")
-	// server := flag.String("server", "wss://noremac.dev/ws/hub", "signaling server URL")
-
+	// server := flag.String("server", "ws://localhost:8080/ws/hub", "signaling server URL")
+	server := flag.String("server", "wss://noremac.dev/ws/hub", "signaling server URL")
+	//xmlFile := flag.String("cascade", "haarcascade_frontalface_default.xml", "path to Haar cascade XML")
 	file := flag.String("file", "", "path to a local video file to stream instead of webcam")
 	room := flag.String("room", "default", "room name")
 	id := flag.String("id", "", "your unique client ID")
@@ -117,22 +119,36 @@ func main() {
 
 	// decide which ffmpeg launcher to use:
 	if *file != "" {
-		// stream a file (at realtime) → two separate RTP streams
-		// Video‐only RTP + SDP
-		go runFFmpegFileCLI(
+		go runFFmpegFileWithDetection(
 			*file,
+			"haarcascade_frontalface_default.xml",
+			640, 480, 30,
 			"rtp://127.0.0.1:5004",
 			map[string]string{
-				"y":            "",                    // overwrite output file
-				"map":          "0:v",                 // pick only the video stream
-				"c:v":          "copy",                // don’t re-encode, preserve SPS/PPS
-				"bsf:v":        "h264_mp4toannexb",    // Annex-B NALUs
-				"payload_type": "109",                 // must match your SDP mapping
-				"f":            "rtp",                 // RTP muxer
-				"sdp_file":     "video.sdp",           // write out video.sdp
-				"sdp_flags":    "+add_parameter_sets", // inject SPS/PPS into SDP
+				"c:v":          "libx264",
+				"preset":       "ultrafast",
+				"tune":         "zerolatency",
+				"an":           "",
+				"f":            "rtp",
+				"payload_type": "109",
 			},
 		)
+		// // stream a file (at realtime) → two separate RTP streams
+		// // Video‐only RTP + SDP
+		// go runFFmpegFileCLI(
+		// 	*file,
+		// 	"rtp://127.0.0.1:5004",
+		// 	map[string]string{
+		// 		"y":            "",                    // overwrite output file
+		// 		"map":          "0:v",                 // pick only the video stream
+		// 		"c:v":          "copy",                // don’t re-encode, preserve SPS/PPS
+		// 		"bsf:v":        "h264_mp4toannexb",    // Annex-B NALUs
+		// 		"payload_type": "109",                 // must match your SDP mapping
+		// 		"f":            "rtp",                 // RTP muxer
+		// 		"sdp_file":     "video.sdp",           // write out video.sdp
+		// 		"sdp_flags":    "+add_parameter_sets", // inject SPS/PPS into SDP
+		// 	},
+		// )
 
 		// Audio‐only RTP + SDP
 		go runFFmpegFileCLI(
@@ -209,6 +225,91 @@ func runFFmpegCLI(input, format string, fps int, size, output string, outArgs ma
 	if err := cmd.Run(); err != nil {
 		log.Fatalf("ffmpeg failed: %v", err)
 	}
+}
+
+// runFFmpegFileWithDetection opens inputFile, runs Haar-cascade face detection,
+// draws rectangles, and pipes the annotated frames into FFmpeg which sends RTP to output.
+func runFFmpegFileWithDetection(
+	inputFile string, // path to video file
+	cascadeXML string, // e.g. "haarcascade_frontalface_default.xml"
+	width, height, fps int,
+	output string, // e.g. "rtp://127.0.0.1:5004"
+	outArgs map[string]string,
+) {
+	// 1) Load classifier
+	classifier := gocv.NewCascadeClassifier()
+	defer classifier.Close()
+	if !classifier.Load(cascadeXML) {
+		log.Fatalf("Error loading cascade file: %s", cascadeXML)
+	}
+
+	// 2) Open video file
+	vc, err := gocv.VideoCaptureFile(inputFile)
+	if err != nil {
+		log.Fatalf("Error opening video file: %v", err)
+	}
+	defer vc.Close()
+
+	// 3) Prepare mat and rectangle color
+	img := gocv.NewMat()
+	defer img.Close()
+	rectColor := color.RGBA{G: 255, A: 0}
+
+	// 4) Build FFmpeg command to read rawvideo from stdin
+	args := []string{
+		"-hide_banner", "-loglevel", "warning",
+		"-f", "rawvideo", "-pix_fmt", "bgr24",
+		"-s", fmt.Sprintf("%dx%d", width, height),
+		"-r", fmt.Sprint(fps),
+		"-i", "pipe:0",
+	}
+	for flag, val := range outArgs {
+		f := flag
+		if !strings.HasPrefix(f, "-") {
+			f = "-" + f
+		}
+		args = append(args, f)
+		if val != "" {
+			args = append(args, val)
+		}
+	}
+	args = append(args, output)
+
+	cmd := exec.Command("ffmpeg", args...)
+	stdin, err := cmd.StdinPipe()
+	if err != nil {
+		log.Fatalf("Error getting stdin pipe for ffmpeg: %v", err)
+	}
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+
+	if err := cmd.Start(); err != nil {
+		log.Fatalf("Failed to start ffmpeg: %v", err)
+	}
+
+	// 5) Read frames, detect, draw, and write into FFmpeg
+	for {
+		if ok := vc.Read(&img); !ok || img.Empty() {
+			break // end of file
+		}
+		// optionally resize if source isn't the exact width/height
+		if img.Cols() != width || img.Rows() != height {
+			gocv.Resize(img, &img, image.Pt(width, height), 0, 0, gocv.InterpolationDefault)
+		}
+		// face detection
+		rects := classifier.DetectMultiScale(img)
+		for _, r := range rects {
+			gocv.Rectangle(&img, r, rectColor, 3)
+		}
+		// write raw BGR bytes to ffmpeg
+		if _, err := stdin.Write(img.ToBytes()); err != nil {
+			log.Printf("Error writing frame to ffmpeg: %v", err)
+			break
+		}
+	}
+
+	stdin.Close()
+	cmd.Wait()
 }
 
 // runFFmpegFileCLI streams a local file at realtime speed (-re) into a single RTP output URL.
@@ -386,76 +487,6 @@ func createPeerConnection(
 	if _, err = pc.AddTrack(audioTrack); err != nil {
 		log.Fatalf("AddTrack audio: %v", err)
 	}
-
-	go func() {
-		f, _ := os.Create("out.h264")
-		defer f.Close()
-		pc.OnTrack(func(track *webrtc.TrackRemote, _ *webrtc.RTPReceiver) {
-			mime := track.Codec().MimeType
-			var f *os.File
-			var err error
-
-			switch mime {
-			case webrtc.MimeTypeH264:
-				f, err = os.Create("out.h264")
-			case webrtc.MimeTypeVP8:
-				f, err = os.Create("out.vp8")
-			case webrtc.MimeTypeOpus:
-				f, err = os.Create("out.opus")
-			default:
-				log.Printf("Skipping unsupported codec %s", mime)
-				return
-			}
-			if err != nil {
-				log.Fatalf("failed to open dump file: %v", err)
-			}
-			defer f.Close()
-
-			switch mime {
-			case webrtc.MimeTypeH264:
-				depkt := &codecs.H264Packet{}
-				for {
-					pkt, _, err := track.ReadRTP()
-					if err != nil {
-						return
-					}
-					nalus, err := depkt.Unmarshal(pkt.Payload)
-					if err != nil {
-						continue
-					}
-					for _, nalu := range nalus {
-						f.Write([]byte{0, 0, 0, 1})
-						f.Write([]byte{nalu})
-					}
-				}
-
-			case webrtc.MimeTypeVP8:
-				depkt := &codecs.VP8Packet{}
-				for {
-					pkt, _, err := track.ReadRTP()
-					if err != nil {
-						return
-					}
-					frame, err := depkt.Unmarshal(pkt.Payload)
-					if err != nil {
-						continue
-					}
-					f.Write(frame)
-				}
-
-			case webrtc.MimeTypeOpus:
-				for {
-					pkt, _, err := track.ReadRTP()
-					if err != nil {
-						return
-					}
-					// Opus RTP payloads can be written raw; you can later wrap them in an Ogg container.
-					f.Write(pkt.Payload)
-				}
-			}
-		})
-
-	}()
 
 	// pump RTP into tracks
 	go pumpRTP("[::]:5004", videoTrack, 109)

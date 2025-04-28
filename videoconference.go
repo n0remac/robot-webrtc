@@ -30,12 +30,13 @@ var (
 // Message is the payload for WebRTC signalling
 type Message struct {
 	Type      string      `json:"type"`
+	Name      string      `json:"name,omitempty"`
 	From      string      `json:"from,omitempty"`
 	To        string      `json:"to,omitempty"`
 	Offer     interface{} `json:"offer,omitempty"`
 	Answer    interface{} `json:"answer,omitempty"`
 	Candidate interface{} `json:"candidate,omitempty"`
-  }
+}
 
 // VideoHandler sets up the HTTP and WebSocket routes for video
 func VideoHandler(mux *http.ServeMux, registry *CommandRegistry) {
@@ -77,32 +78,33 @@ func registerSignallingCommands(reg *CommandRegistry) {
 	reg.RegisterWebsocket("join", func(_ string, hub *Hub, data map[string]interface{}) {
 		room := getRoom(data)
 		from := data["from"].(string)
-		broadcastWebRTC(hub, room, Message{Type:"join", From:from})
-	  })
+		broadcastWebRTC(hub, room, Message{Type: "join", From: from})
+	})
 
 	// "offer": forward an SDP offer
 	reg.RegisterWebsocket("offer", func(_ string, hub *Hub, data map[string]interface{}) {
 		room := getRoom(data)
 		from := data["from"].(string)
-		to   := data["to"].(string)
+		to := data["to"].(string)
 		broadcastWebRTC(hub, room, Message{
-		  Type:      "offer",
-		  From:      from,
-		  To:        to,
-		  Offer:     data["offer"],
+			Type:  "offer",
+			From:  from,
+			To:    to,
+			Name:  data["name"].(string),
+			Offer: data["offer"],
 		})
-	  })
-	  
+	})
 
 	// "answer": forward an SDP answer
 	reg.RegisterWebsocket("answer", func(_ string, hub *Hub, data map[string]interface{}) {
 		room := getRoom(data)
 		from := data["from"].(string)
-		to   := data["to"].(string)
+		to := data["to"].(string)
 		broadcastWebRTC(hub, room, Message{
 			Type:   "answer",
-			From:      from,
-			To:        to,
+			From:   from,
+			To:     to,
+			Name:   data["name"].(string),
 			Answer: data["answer"],
 		})
 	})
@@ -111,7 +113,7 @@ func registerSignallingCommands(reg *CommandRegistry) {
 	reg.RegisterWebsocket("candidate", func(_ string, hub *Hub, data map[string]interface{}) {
 		room := getRoom(data)
 		from := data["from"].(string)
-		to   := data["to"].(string)
+		to := data["to"].(string)
 		broadcastWebRTC(hub, room, Message{
 			Type:      "candidate",
 			From:      from,
@@ -124,8 +126,8 @@ func registerSignallingCommands(reg *CommandRegistry) {
 	reg.RegisterWebsocket("leave", func(_ string, hub *Hub, data map[string]interface{}) {
 		room := getRoom(data)
 		from := data["from"].(string)
-		broadcastWebRTC(hub, room, Message{Type:"leave", From:from})
-	  })
+		broadcastWebRTC(hub, room, Message{Type: "leave", From: from})
+	})
 }
 
 // getRoom extracts the room name from incoming WS data
@@ -148,6 +150,7 @@ func broadcastWebRTC(hub *Hub, room string, msg Message) {
 
 // VideoPage renders the HTML layout for the video client
 func VideoPage(w http.ResponseWriter, r *http.Request) {
+	// Determine room from query or default
 	room := r.URL.Query().Get("room")
 	if room == "" {
 		room = "default"
@@ -162,20 +165,36 @@ func VideoPage(w http.ResponseWriter, r *http.Request) {
 			"class":      "flex flex-col items-center min-h-screen",
 			"data-theme": "dark",
 		}),
-			// join screen
-			Div(Id("join-screen"), Class("mt-24"),
+			// Join screen with room selector and device tests
+			Div(Id("join-screen"), Class("mt-24 flex flex-col items-center space-y-4"),
 				Input(Attrs(map[string]string{
 					"type":        "text",
 					"id":          "name",
-					"placeholder": "Enter your name",
-					"class":       "border rounded px-2 py-1",
+					"placeholder": "Your name",
+					"class":       "border rounded px-2 py-1 w-64",
 				})),
-				Button(Id("join-btn"), Class("ml-2 btn"), T("Join")),
+				Input(Attrs(map[string]string{
+					"type":        "text",
+					"id":          "room",
+					"placeholder": "Room name",
+					"class":       "border rounded px-2 py-1 w-64",
+				})),
+				// Device test buttons
+				Div(Class("space-x-2"),
+					Button(Id("test-camera"), Class("btn btn-sm"), T("Test Camera")),
+					Button(Id("test-mic"), Class("btn btn-sm"), T("Test Microphone")),
+				),
+				// Preview video element (hidden until camera test)
+				Raw(`<video id="preview-video" style="display:none; width:320px; height:240px; border:1px solid #444; border-radius:4px;" autoplay playsinline muted></video>`),
+				// Mic status display
+				Div(Id("mic-status"), Class("text-sm text-gray-300")),
+				// Join button
+				Button(Id("join-btn"), Class("btn mt-2 w-32"), T("Join")),
 			),
 
-			// participant view
+			// Participant view remains unchanged
 			Div(Id("participant-view"), Attr("style", "display:none;"), Class("mt-6"),
-				Div(Id("videos"), Class("relative flex justify-center items-center w-full h-full")),
+				Div(Id("videos"), Class("relative grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4 w-full h-full p-4")),
 				Div(Id("controls"), Class("mt-5 space-x-4"),
 					Button(Id("mute-btn"), Class("btn btn-sm"), T("Mute")),
 					Button(Id("video-btn"), Class("btn btn-sm"), T("Stop Video")),

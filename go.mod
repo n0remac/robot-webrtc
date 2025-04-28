@@ -8,12 +8,10 @@ require (
 	github.com/pion/rtp v1.8.13
 	github.com/pion/webrtc/v4 v4.0.15
 	github.com/sashabaranov/go-openai v1.38.1
-	github.com/u2takey/ffmpeg-go v0.5.0
+	gocv.io/x/gocv v0.41.0
 )
 
 require (
-	github.com/aws/aws-sdk-go v1.38.20 // indirect
-	github.com/jmespath/go-jmespath v0.4.0 // indirect
 	github.com/pion/datachannel v1.5.10 // indirect
 	github.com/pion/dtls/v3 v3.0.6 // indirect
 	github.com/pion/ice/v4 v4.0.10 // indirect
@@ -28,7 +26,6 @@ require (
 	github.com/pion/stun/v3 v3.0.0 // indirect
 	github.com/pion/transport/v3 v3.0.7 // indirect
 	github.com/pion/turn/v4 v4.0.0 // indirect
-	github.com/u2takey/go-utils v0.3.1 // indirect
 	github.com/wlynxg/anet v0.0.5 // indirect
 	golang.org/x/crypto v0.33.0 // indirect
 	golang.org/x/net v0.35.0 // indirect

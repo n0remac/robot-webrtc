@@ -58,6 +58,8 @@ const Logger = (() => {
 
 Logger.attachSocket(`${wsProtocol}://${domainName}/ws/logs`);
 document.addEventListener("DOMContentLoaded", () => {
+  document.getElementById('test-camera').addEventListener('click', testCamera);
+  document.getElementById('test-mic').addEventListener('click', testMic);
     document.getElementById('join-btn').addEventListener('click', joinSession);
     document.getElementById('mute-btn').addEventListener('click', toggleMute);
     document.getElementById('video-btn').addEventListener('click', toggleVideo);
@@ -69,6 +71,7 @@ let isMuted = false;
 let isVideoStopped = false;
 let ws;
 let globalIceServers = [];
+const peerNames = {};
 
 const peers = {};
 
@@ -83,6 +86,33 @@ window.addEventListener('beforeunload', () => {
         ws.close();
     }
 });
+
+let previewStream;
+async function testCamera() {
+  try {
+    previewStream = await navigator.mediaDevices.getUserMedia({ video: true });
+    const preview = document.getElementById('preview-video');
+    preview.srcObject = previewStream;
+    preview.style.display = 'block';
+    Logger.info('Camera test passed');
+  } catch (err) {
+    alert('Camera access failed: ' + err.message);
+    Logger.error('Camera test failed', err);
+  }
+}
+
+let micStream;
+async function testMic() {
+  try {
+    micStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    document.getElementById('mic-status').textContent = '🎤 Microphone is working';
+    // optional: hook into Web Audio API to display levels…
+    Logger.info('Mic test passed');
+  } catch (err) {
+    document.getElementById('mic-status').textContent = '❌ Mic access denied';
+    Logger.error('Mic test failed', err);
+  }
+}
 
 async function joinSession() {
     myName = document.getElementById('name').value;
@@ -122,13 +152,20 @@ function setupIceServers(turnData) {
 }
 
 async function setupLocalMedia() {
+  if (previewStream && micStream) {
+    // merge the two into one MediaStream
+    const tracks = [...previewStream.getVideoTracks(), ...micStream.getAudioTracks()];
+    localStream = new MediaStream(tracks);
+    Logger.info('gUM success (preview + mic)');
+  } else {
     try {
-        localStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
-        Logger.info('gUM success');
+      localStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+      Logger.info('gUM success');
     } catch (err) {
-        Logger.error('getUserMedia failed', { message: err.message, name: err.name });
-        throw err;
+      Logger.error('getUserMedia failed', { message: err.message, name: err.name });
+      throw err;
     }
+  }
 }
 
 function showLocalVideo() {
@@ -163,6 +200,9 @@ async function connectWebSocket() {
   
     ws.onmessage = ({ data }) => {
       const msg = JSON.parse(data);
+      if (msg.name) {
+        peerNames[msg.from] = msg.name;
+      }
       // filter messages not addressed to us or echoes
       if (msg.to && msg.to !== myUUID) return;
       if (msg.from === myUUID) return;
@@ -216,7 +256,29 @@ function addVideoStream(stream, uuid) {
         muted: true
     });
     video.classList.add('remote-video');
-    document.getElementById('videos').appendChild(video);
+
+    // add name overlay
+    const nameOverlay = document.createElement('div');
+    nameOverlay.className = 'name-overlay';
+    nameOverlay.textContent = peerNames[uuid] || uuid;
+    nameOverlay.style.position = 'absolute';
+    nameOverlay.style.top = '0';
+    nameOverlay.style.left = '0';
+    nameOverlay.style.color = 'white';
+    nameOverlay.style.backgroundColor = 'rgba(0, 0, 0, 0.5)';
+
+    const videoContainer = document.createElement('div');
+    videoContainer.style.position = 'relative';
+    videoContainer.style.overflow = 'hidden';
+    videoContainer.style.borderRadius = '10px';
+    videoContainer.style.boxShadow = '0 0 10px rgba(0, 0, 0, 0.5)';
+    videoContainer.style.margin = '10px';
+    videoContainer.style.backgroundColor = 'black';
+    videoContainer.appendChild(video);
+    videoContainer.appendChild(nameOverlay);
+
+
+    document.getElementById('videos').appendChild(videoContainer);
     Logger.info('remote video added', { peer: uuid });
 }
 
@@ -288,6 +350,7 @@ function createPeerConnection(peerId) {
           offer: pc.localDescription,
           from:  myUUID,
           to:    peerId,
+          name:  myName,
           room:  ROOM
         }));
         Logger.info('offer sent', { to: peerId });
@@ -342,6 +405,7 @@ function createPeerConnection(peerId) {
               answer: pc.localDescription,
               from:   myUUID,
               to:     peerId,
+              name:   myName,
               room:   ROOM
             }));
             Logger.info('answer sent', { to: peerId });
