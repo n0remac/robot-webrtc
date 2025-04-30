@@ -277,7 +277,6 @@ function addVideoStream(stream, uuid) {
     videoContainer.appendChild(video);
     videoContainer.appendChild(nameOverlay);
 
-
     document.getElementById('videos').appendChild(videoContainer);
     Logger.info('remote video added', { peer: uuid });
 }

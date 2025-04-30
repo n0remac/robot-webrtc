@@ -131,7 +131,6 @@ func (c *WebsocketClient) readPump() {
 			continue
 		}
 		handler, ok := c.registry.handlers[typStr]
-
 		if !ok {
 			logInfo("unknown command", map[string]interface{}{"cmd": typStr, "room": c.room})
 			continue

@@ -133,23 +133,6 @@ func main() {
 				"payload_type": "109",
 			},
 		)
-		// // stream a file (at realtime) → two separate RTP streams
-		// // Video‐only RTP + SDP
-		// go runFFmpegFileCLI(
-		// 	*file,
-		// 	"rtp://127.0.0.1:5004",
-		// 	map[string]string{
-		// 		"y":            "",                    // overwrite output file
-		// 		"map":          "0:v",                 // pick only the video stream
-		// 		"c:v":          "copy",                // don’t re-encode, preserve SPS/PPS
-		// 		"bsf:v":        "h264_mp4toannexb",    // Annex-B NALUs
-		// 		"payload_type": "109",                 // must match your SDP mapping
-		// 		"f":            "rtp",                 // RTP muxer
-		// 		"sdp_file":     "video.sdp",           // write out video.sdp
-		// 		"sdp_flags":    "+add_parameter_sets", // inject SPS/PPS into SDP
-		// 	},
-		// )
-
 		// Audio‐only RTP + SDP
 		go runFFmpegFileCLI(
 			*file,
@@ -409,9 +392,6 @@ func handleSignal(ws *websocket.Conn, api *webrtc.API, myID, room string, msg ma
 		pc := createPeerConnection(api, myID, from, room, ws)
 		peers[from] = pc
 		sendOffer(ws, pc, myID, from, room)
-		log.Println("–––– LOCAL SDP (answer) ––––")
-		log.Println(pc.LocalDescription().SDP)
-		log.Println("–––––––––––––––––––––––––––")
 
 	case "offer":
 		// incoming offer → create or reuse PC, set remote, then answer
@@ -439,10 +419,6 @@ func handleSignal(ws *websocket.Conn, api *webrtc.API, myID, room string, msg ma
 			"to":     from,
 			"room":   room,
 		})
-
-		log.Println("–––– LOCAL SDP (answer) ––––")
-		log.Println(pc.LocalDescription().SDP)
-		log.Println("–––––––––––––––––––––––––––")
 
 	case "answer":
 		// incoming answer → finish handshake

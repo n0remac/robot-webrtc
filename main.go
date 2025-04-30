@@ -48,6 +48,7 @@ func main() {
 	// Apps
 	Home(mux, globalRegistry)
 	VideoHandler(mux, globalRegistry)
+	GameUI(mux, globalRegistry)
 	ShadowReddit(mux)
 	GenerateStory(mux)
 	Trick(mux)
