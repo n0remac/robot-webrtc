@@ -98,7 +98,7 @@ func websocketURL(r *http.Request) string {
 
 func lobbyWebsocket(registry *CommandRegistry) func(http.ResponseWriter, *http.Request) {
 	registry.RegisterWebsocket("joinCardGame", func(_ string, hub *Hub, data map[string]interface{}) {
-		fmt.Println("join", data)
+
 		var l Lobby
 		room := data["room"].(string)
 
@@ -114,31 +114,98 @@ func lobbyWebsocket(registry *CommandRegistry) func(http.ResponseWriter, *http.R
 
 		l.Players = append(l.Players, data["name"].(string))
 		lobbies[room] = &l
-		msg := map[string]interface{}{
-			"type":    "lobby",
-			"players": l.Players,
-		}
 
-		raw, err := json.Marshal(msg)
-		if err != nil {
-			log.Println("⚠️  marshal error:", err)
-			return
-		}
-		hub.Broadcast <- WebsocketMessage{Room: room, Content: raw}
+		page := Div(
+			Id("lobby"),
+			Class("flex flex-col items-center justify-center h-screen bg-gray-800 text-white space-y-4"),
+			Div(Class("text-2xl"), T("Lobby")),
+			Div(Class("text-lg"), T("Players:")),
+			Div(Id("player-list"), Class("text-lg"), Ch(func() []*Node {
+				var nodes []*Node
+				for _, player := range l.Players {
+					nodes = append(nodes, Div(Class("text-lg"), T(player)))
+				}
+				return nodes
+			}())),
+			Form(
+				Attr("ws-send", "submit"),
+				Input(
+					Type("hidden"),
+					Name("type"),
+					Value("startCardGame"),
+				),
+				Input(
+					Type("hidden"),
+					Name("room"),
+					Value(room),
+				),
+				Input(
+					Type("submit"),
+					Class("btn btn-primary w-32"),
+					Value("Start Game"),
+				),
+			),
+		)
+		hub.Broadcast <- WebsocketMessage{Room: room, Content: []byte(page.Render())}
 	})
-	registry.RegisterWebsocket("start", func(_ string, hub *Hub, data map[string]interface{}) {
+	registry.RegisterWebsocket("startCardGame", func(_ string, hub *Hub, data map[string]interface{}) {
+		fmt.Println("Starting game in room:", data["room"])
+
 		room := data["room"].(string)
-		msg := map[string]interface{}{
-			"type": "start",
+		deck, hand := newGameState()
+		var deckTop Card
+		if len(deck) > 0 {
+			deckTop = deck[0]
 		}
 
-		raw, err := json.Marshal(msg)
-		if err != nil {
-			log.Println("⚠️  marshal error:", err)
-			return
-		}
+		page := DefaultLayout(
+			Script(Raw(loadFile("cards.js"))),
+			Div(
+				Id("lobby"),
+				Script(Raw(fmt.Sprintf(`
+					document.addEventListener('DOMContentLoaded', function() {
+					var btn = document.getElementById('start-btn');
+					if (btn) {
+						btn.addEventListener('click', function() {
+						fetch('/game/mvp/start?room=%s', { method: 'POST' })
+							.then(function(resp) { if (!resp.ok) alert('Failed to start game'); });
+						});
+					}
+					});
+				`, room))),
+				Div(
+					Div(
+						Class("p-4 bg-gray-100 text-center"),
+						Button(Id("start-btn"), Class("btn btn-secondary"), T("Start Game")),
+					),
+					Div(Class("flex flex-col h-screen"),
+						Div(
+							Id("table-area"),
+							Class("relative flex-1 bg-green-800"),
+							Div(Id("deck-stack"), Class("absolute top-4 left-4"), standardCardFace(deckTop, true)),
+							Div(Id("discard-pile"), Class("absolute top-4 left-20")),
+						),
+						Div(
+							Id("player-hand"),
+							Class("flex overflow-x-auto bg-gray-900 p-2"),
+							Ch(func() []*Node {
+								var nodes []*Node
+								for _, c := range hand {
+									n := standardCardFace(c, false)
+									n.Attrs["draggable"] = "true"
+									n.Attrs["ondragstart"] = "onDragStart(event)"
+									n.Attrs["data-card-id"] = c.ID
 
-		hub.Broadcast <- WebsocketMessage{Room: room, Content: raw}
+									nodes = append(nodes, n)
+								}
+								return nodes
+							}()),
+						)),
+				),
+			),
+		)
+
+		hub.Broadcast <- WebsocketMessage{Room: room, Content: []byte(page.Render())}
 	})
 
 	return func(w http.ResponseWriter, r *http.Request) {
@@ -174,6 +241,7 @@ func renderGamePage(w http.ResponseWriter, r *http.Request) {
 
 func joinScreen(room string) *Node {
 	joinUI := Div(
+		Id("lobby"),
 		Class("flex flex-col items-center justify-center h-screen bg-gray-800 text-white space-y-4"),
 		Div(Class("text-2xl"), T("Join Trick Evolution")),
 
@@ -194,12 +262,14 @@ func joinScreen(room string) *Node {
 				"id":          "name-input",
 				"placeholder": "Enter your name",
 				"class":       "input input-bordered w-64 text-black",
-				"name":       "name",
+				"name":        "name",
 			})),
-			Button(
-				Id("join-btn"),
+			Input(
 				Type("submit"),
-				Class("btn btn-primary w-32"), T("Join Room")),
+				Id("join-btn"),
+				Class("btn btn-primary w-32"),
+				Value("Join Room"),
+			),
 		),
 	)
 

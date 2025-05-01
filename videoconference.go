@@ -176,7 +176,7 @@ func VideoPage(w http.ResponseWriter, r *http.Request) {
 				Input(Attrs(map[string]string{
 					"type":        "text",
 					"id":          "room",
-					"placeholder": "Room name",
+					"placeholder": room,
 					"class":       "border rounded px-2 py-1 w-64",
 				})),
 				// Device test buttons
@@ -198,6 +198,7 @@ func VideoPage(w http.ResponseWriter, r *http.Request) {
 				Div(Id("controls"), Class("mt-5 space-x-4"),
 					Button(Id("mute-btn"), Class("btn btn-sm"), T("Mute")),
 					Button(Id("video-btn"), Class("btn btn-sm"), T("Stop Video")),
+					Button(Id("noise-btn"), Class("btn btn-sm"), T("Noise Suppression")),
 				),
 			),
 		),

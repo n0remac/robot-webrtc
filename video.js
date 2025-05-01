@@ -63,6 +63,7 @@ document.addEventListener("DOMContentLoaded", () => {
     document.getElementById('join-btn').addEventListener('click', joinSession);
     document.getElementById('mute-btn').addEventListener('click', toggleMute);
     document.getElementById('video-btn').addEventListener('click', toggleVideo);
+    document.getElementById('noise-btn').addEventListener('click', toggleNoise);
 });
 let myUUID = null;
 let myName;
@@ -174,7 +175,7 @@ function showLocalVideo() {
         srcObject: localStream,
         autoplay: true,
         playsInline: true,
-        muted: false,
+        muted: true,
     });
     if (Object.keys(peers).length === 0) {
         video.classList.add('remote-video');
@@ -253,7 +254,7 @@ function addVideoStream(stream, uuid) {
         srcObject: stream,
         autoplay: true,
         playsInline: true,
-        muted: true
+        muted: false,
     });
     video.classList.add('remote-video');
 
@@ -293,6 +294,15 @@ function handleUserDisconnect(uuid) {
       } else {
         Logger.warn('no peer connection found', { peer: uuid });
       }
+}
+
+function toggleNoise() {
+    localStream.getAudioTracks().forEach(track => track.enabled = !track.enabled);
+    track.applyConstraints({
+      echoCancellation: true,
+      noiseSuppression: true,
+      autoGainControl: true
+    });
 }
 
 function toggleMute() {
