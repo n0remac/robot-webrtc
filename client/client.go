@@ -151,13 +151,13 @@ func main() {
 		go runFFmpegCLI(
 			"/dev/video0", "v4l2", 30, "640x480",
 			"rtp://127.0.0.1:5004",
-			map[string]string{"c:v": "libx264", "preset": "ultrafast", "tune": "zerolatency", "an": "", "f": "rtp"},
+			map[string]string{"c:v": "libx264", "preset": "ultrafast", "tune": "zerolatency", "pix_fmt": "yuv420p", "an": "", "f": "rtp", "payload_type": "109"},
 		)
-		go runFFmpegCLI(
-			"default", "alsa", 0, "",
-			"rtp://127.0.0.1:5006",
-			map[string]string{"c:a": "libopus", "vn": "", "f": "rtp"},
-		)
+		// go runFFmpegCLI(
+		// 	"default", "alsa", 0, "",
+		// 	"rtp://127.0.0.1:5006",
+		// 	map[string]string{"c:a": "libopus", "vn": "", "f": "rtp"},
+		// )
 	}
 
 	// wait for CTRL+C
