@@ -250,17 +250,19 @@ func handleSignal(
 	from, _ := msg["from"].(string)
 	to, _ := msg["to"].(string)
 
-	// always allow join messages, but drop everything else not addressed to us
+	// allow only join or messages addressed to us
 	if typ != "join" && to != myID {
 		return
 	}
-	// ignore our own join echos
+	// drop our own join echo
 	if typ == "join" && from == myID {
 		return
 	}
 
-	// helper to get-or-create PC
+	// get-or-create (with mutex)
 	getOrCreatePC := func() *webrtc.PeerConnection {
+		peersMu.Lock()
+		defer peersMu.Unlock()
 		if pc := peers[from]; pc != nil {
 			return pc
 		}
@@ -269,66 +271,53 @@ func handleSignal(
 		return pc
 	}
 
-	// polite-peer: lower lexical ID wins
-	polite := myID < from
-
 	switch typ {
 	case "join":
-		log.Printf("Peer %s joined → creating PC & sending offer", from)
-		pc := getOrCreatePC()
-		// mark that we're about to make an offer
-		makingOffer[from] = true
-		sendOffer(ws, pc, myID, from, room)
+		log.Printf("Peer %s joined → creating PC", from)
+		_ = getOrCreatePC() // no sendOffer here
+
 	case "offer":
 		log.Printf("Received offer from %s", from)
 		pc := getOrCreatePC()
 
-		collision := makingOffer[from] || pc.SignalingState() != webrtc.SignalingStateStable
-		ignoreOffer := !polite && collision
-		if ignoreOffer {
-			log.Printf("Ignoring offer from %s (collision)", from)
-			return
-		}
-		if collision {
-			// rollback our unfinished local description
-			if err := pc.SetLocalDescription(
-				webrtc.SessionDescription{Type: webrtc.SDPTypeRollback},
-			); err != nil {
-				log.Printf("Rollback error: %v", err)
-			}
-		}
-
-		// apply remote offer
-		rawOffer := msg["offer"].(map[string]interface{})
-		sdp := rawOffer["sdp"].(string)
-		if err := pc.SetRemoteDescription(
-			webrtc.SessionDescription{Type: webrtc.SDPTypeOffer, SDP: sdp},
-		); err != nil {
-			log.Printf("SetRemoteDescription error: %v", err)
+		// 1) only answer when stable
+		if pc.SignalingState() != webrtc.SignalingStateStable {
+			log.Printf("  → dropping offer; state=%s", pc.SignalingState())
 			return
 		}
 
-		// flush any queued ICE candidates
+		// 2) set remote
+		raw := msg["offer"].(map[string]interface{})
+		sdp := raw["sdp"].(string)
+		if err := pc.SetRemoteDescription(webrtc.SessionDescription{
+			Type: webrtc.SDPTypeOffer, SDP: sdp,
+		}); err != nil {
+			log.Printf("  → SetRemoteDescription error: %v", err)
+			return
+		}
+
+		// 3) flush queued ICE (under lock)
+		queuedCandsMu.Lock()
 		for _, cand := range queuedCandidates[from] {
 			if err := pc.AddICECandidate(cand); err != nil {
-				log.Printf("Queued AddICECandidate error: %v", err)
+				log.Printf("  → queued AddICECandidate error: %v", err)
 			}
 		}
 		queuedCandidates[from] = nil
+		queuedCandsMu.Unlock()
 
-		// answer
+		// 4) answer
 		answer, err := pc.CreateAnswer(nil)
 		if err != nil {
-			log.Printf("CreateAnswer error: %v", err)
+			log.Printf("  → CreateAnswer error: %v", err)
 			return
 		}
 		if err := pc.SetLocalDescription(answer); err != nil {
-			log.Printf("SetLocalDescription(answer) error: %v", err)
+			log.Printf("  → SetLocalDescription(answer) error: %v", err)
 			return
 		}
-		// answered, so no longer making an offer
-		makingOffer[from] = false
 
+		// 5) send it
 		ws.WriteJSON(map[string]interface{}{
 			"type":   "answer",
 			"answer": pc.LocalDescription(),
@@ -337,27 +326,35 @@ func handleSignal(
 			"room":   room,
 			"name":   "robot",
 		})
+
 	case "answer":
 		log.Printf("Received answer from %s", from)
+		peersMu.Lock()
 		pc := peers[from]
+		peersMu.Unlock()
 		if pc == nil {
 			log.Printf("No PC found for %s on answer", from)
 			return
 		}
+
 		rawAns := msg["answer"].(map[string]interface{})
 		sdp := rawAns["sdp"].(string)
-		if err := pc.SetRemoteDescription(
-			webrtc.SessionDescription{Type: webrtc.SDPTypeAnswer, SDP: sdp},
-		); err != nil {
+		if err := pc.SetRemoteDescription(webrtc.SessionDescription{
+			Type: webrtc.SDPTypeAnswer, SDP: sdp,
+		}); err != nil {
 			log.Printf("SetRemoteDescription(answer) error: %v", err)
 		}
-		// flush any queued ICE candidates
+
+		// flush queued ICE for answers too
+		queuedCandsMu.Lock()
 		for _, cand := range queuedCandidates[from] {
 			if err := pc.AddICECandidate(cand); err != nil {
 				log.Printf("Queued AddICECandidate error: %v", err)
 			}
 		}
 		queuedCandidates[from] = nil
+		queuedCandsMu.Unlock()
+
 	case "candidate":
 		raw := msg["candidate"].(map[string]interface{})
 		ice := webrtc.ICECandidateInit{
@@ -366,25 +363,33 @@ func handleSignal(
 			SDPMLineIndex: ptrUint16(uint16(raw["sdpMLineIndex"].(float64))),
 		}
 
+		peersMu.Lock()
 		pc := peers[from]
-		// if remote not set yet, buffer it
+		peersMu.Unlock()
+		// buffer or add
+		queuedCandsMu.Lock()
 		if pc == nil || pc.RemoteDescription() == nil {
 			queuedCandidates[from] = append(queuedCandidates[from], ice)
-		} else {
-			if err := pc.AddICECandidate(ice); err != nil {
-				log.Printf("AddICECandidate error: %v", err)
-			}
+		} else if err := pc.AddICECandidate(ice); err != nil {
+			log.Printf("AddICECandidate error: %v", err)
 		}
+		queuedCandsMu.Unlock()
+
 	case "leave":
 		log.Printf("Peer %s left → cleaning up", from)
-		if pc := peers[from]; pc != nil {
+		peersMu.Lock()
+		pc := peers[from]
+		delete(peers, from)
+		peersMu.Unlock()
+		if pc != nil {
 			pc.Close()
-			delete(peers, from)
-			delete(makingOffer, from)
-			delete(queuedCandidates, from)
 		}
-	default:
-		// unknown message types are ignored
+		makingOfferMu.Lock()
+		delete(makingOffer, from)
+		makingOfferMu.Unlock()
+		queuedCandsMu.Lock()
+		delete(queuedCandidates, from)
+		queuedCandsMu.Unlock()
 	}
 }
 
@@ -400,62 +405,68 @@ func createPeerConnection(
 	if err != nil {
 		log.Fatalf("NewPeerConnection error: %v", err)
 	}
+	pc.OnNegotiationNeeded(func() {
+		makingOfferMu.Lock()
+		makingOffer[peerID] = true
+		makingOfferMu.Unlock()
 
-	// add our media tracks
-	if _, err = pc.AddTrack(videoTrack); err != nil {
-		log.Fatalf("AddTrack video: %v", err)
-	}
-	if _, err = pc.AddTrack(audioTrack); err != nil {
-		log.Fatalf("AddTrack audio: %v", err)
-	}
+		offer, err := pc.CreateOffer(nil)
+		if err != nil {
+			log.Printf("OnNegotiationNeeded CreateOffer: %v", err)
+			return
+		}
+		if err := pc.SetLocalDescription(offer); err != nil {
+			log.Printf("OnNegotiationNeeded SetLocalDescription: %v", err)
+			return
+		}
+		ws.WriteJSON(map[string]interface{}{
+			"type":  "offer",
+			"offer": pc.LocalDescription(),
+			"from":  myID,
+			"to":    peerID,
+			"room":  room,
+			"name":  "robot",
+		})
 
-	// pump RTP into tracks
-	go pumpRTP("[::]:5004", videoTrack, 109)
-	go pumpRTP("[::]:5006", audioTrack, 111)
+		// clear the flag once sent
+		makingOfferMu.Lock()
+		makingOffer[peerID] = false
+		makingOfferMu.Unlock()
+	})
 
-	// when we generate ICE, send it to the peer
+	// register ICE-candidate and connection handlers
 	pc.OnICECandidate(func(c *webrtc.ICECandidate) {
 		if c == nil {
 			return
 		}
-		ice := c.ToJSON()
 		ws.WriteJSON(map[string]interface{}{
 			"type":      "candidate",
-			"candidate": ice,
+			"candidate": c.ToJSON(),
 			"from":      myID,
 			"to":        peerID,
 			"room":      room,
+			"name":      "robot",
 		})
 	})
-
-	pc.OnConnectionStateChange(func(s webrtc.PeerConnectionState) {
-		log.Printf("🏓 PeerConnection state with %s: %s", peerID, s.String())
-	})
-
 	pc.OnICEConnectionStateChange(func(s webrtc.ICEConnectionState) {
 		if s == webrtc.ICEConnectionStateFailed {
 			restartICE(pc, ws, myID, peerID, room)
 		}
 	})
 
-	return pc
-}
-
-// sendOffer creates and sends an offer to the given peer
-func sendOffer(ws *websocket.Conn, pc *webrtc.PeerConnection, myID, peerID, room string) {
-	offer, err := pc.CreateOffer(nil)
-	if err != nil {
-		log.Printf("CreateOffer error: %v", err)
-		return
+	// add tracks _after_ OnNegotiationNeeded is set
+	if _, err := pc.AddTrack(videoTrack); err != nil {
+		log.Fatalf("AddTrack video: %v", err)
 	}
-	pc.SetLocalDescription(offer)
-	ws.WriteJSON(map[string]interface{}{
-		"type":  "offer",
-		"offer": pc.LocalDescription(),
-		"from":  myID,
-		"to":    peerID,
-		"room":  room,
-	})
+	if _, err := pc.AddTrack(audioTrack); err != nil {
+		log.Fatalf("AddTrack audio: %v", err)
+	}
+
+	// pump RTP
+	go pumpRTP("[::]:5004", videoTrack, 109)
+	go pumpRTP("[::]:5006", audioTrack, 111)
+
+	return pc
 }
 
 // helpers for pointers
@@ -479,6 +490,7 @@ func restartICE(pc *webrtc.PeerConnection, ws *websocket.Conn, myID, peerID, roo
 		"from":  myID,
 		"to":    peerID,
 		"room":  room,
+		"name":  "robot",
 	})
 	log.Printf("▶ ICE-restart sent to %s", peerID)
 	makingOffer[peerID] = false
@@ -494,7 +506,7 @@ func connectAndSignal(api *webrtc.API, myID, room, wsURL string) error {
 	defer ws.Close()
 
 	// send join
-	ws.WriteJSON(map[string]interface{}{"type": "join", "join": myID, "from": myID, "room": room})
+	ws.WriteJSON(map[string]interface{}{"type": "join", "join": myID, "from": myID, "room": room, "name": "robot"})
 
 	// read loop
 	for {
