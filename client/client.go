@@ -395,7 +395,7 @@ func createPeerConnection(
 	ws *websocket.Conn,
 ) *webrtc.PeerConnection {
 	pc, err := api.NewPeerConnection(webrtc.Configuration{
-		ICEServers: []webrtc.ICEServer{{URLs: []string{"stun:stun.l.google.com:19302"}}},
+		ICEServers: globalIceServers,
 	})
 	if err != nil {
 		log.Fatalf("NewPeerConnection error: %v", err)
@@ -463,6 +463,7 @@ func ptrString(s string) *string { return &s }
 func ptrUint16(u uint16) *uint16 { return &u }
 
 func restartICE(pc *webrtc.PeerConnection, ws *websocket.Conn, myID, peerID, room string) {
+	makingOffer[peerID] = true
 	offer, err := pc.CreateOffer(&webrtc.OfferOptions{ICERestart: true})
 	if err != nil {
 		log.Println("ICE-restart CreateOffer:", err)
@@ -480,6 +481,7 @@ func restartICE(pc *webrtc.PeerConnection, ws *websocket.Conn, myID, peerID, roo
 		"room":  room,
 	})
 	log.Printf("▶ ICE-restart sent to %s", peerID)
+	makingOffer[peerID] = false
 }
 
 // connectAndSignal manages WebSocket signalling (with auto-reconnect)
