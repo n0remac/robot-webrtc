@@ -20,9 +20,11 @@ import (
 
 // global state
 var (
-	peers      = make(map[string]*webrtc.PeerConnection)
-	videoTrack *webrtc.TrackLocalStaticRTP
-	audioTrack *webrtc.TrackLocalStaticRTP
+	peers            = make(map[string]*webrtc.PeerConnection)
+	videoTrack       *webrtc.TrackLocalStaticRTP
+	audioTrack       *webrtc.TrackLocalStaticRTP
+	makingOffer      = make(map[string]bool)
+	queuedCandidates = make(map[string][]webrtc.ICECandidateInit)
 )
 
 func main() {
@@ -30,7 +32,7 @@ func main() {
 	// server := flag.String("server", "ws://localhost:8080/ws/hub", "signaling server URL")
 	server := flag.String("server", "wss://noremac.dev/ws/hub", "signaling server URL")
 	//xmlFile := flag.String("cascade", "haarcascade_frontalface_default.xml", "path to Haar cascade XML")
-	file := flag.String("file", "", "path to a local video file to stream instead of webcam")
+	// file := flag.String("file", "", "path to a local video file to stream instead of webcam")
 	room := flag.String("room", "default", "room name")
 	id := flag.String("id", "", "your unique client ID")
 	flag.Parse()
@@ -115,50 +117,17 @@ func main() {
 		}
 	}()
 
-	// decide which ffmpeg launcher to use:
-	if *file != "" {
-
-		// go runFFmpegFileWithDetection(
-		// 	*file,
-		// 	"haarcascade_frontalface_default.xml",
-		// 	640, 480, 30,
-		// 	"rtp://127.0.0.1:5004",
-		// 	map[string]string{
-		// 		"c:v":          "libx264",
-		// 		"preset":       "ultrafast",
-		// 		"tune":         "zerolatency",
-		// 		"an":           "",
-		// 		"f":            "rtp",
-		// 		"payload_type": "109",
-		// 	},
-		// )
-		// // Audio‐only RTP + SDP
-		// go runFFmpegFileCLI(
-		// 	*file,
-		// 	"rtp://127.0.0.1:5006",
-		// 	map[string]string{
-		// 		"y":            "",          // overwrite output file
-		// 		"map":          "0:a",       // pick only the audio stream
-		// 		"c:a":          "libopus",   // encode audio
-		// 		"payload_type": "111",       // audio payload type
-		// 		"f":            "rtp",       // RTP muxer
-		// 		"sdp_file":     "audio.sdp", // write out audio.sdp
-		// 	},
-		// )
-
-	} else {
-		// your existing webcam + mic
-		go runFFmpegCLI(
-			"/dev/video0", "v4l2", 30, "640x480",
-			"rtp://127.0.0.1:5004",
-			map[string]string{"c:v": "libx264", "preset": "ultrafast", "tune": "zerolatency", "pix_fmt": "yuv420p", "an": "", "f": "rtp", "payload_type": "109"},
-		)
-		// go runFFmpegCLI(
-		// 	"default", "alsa", 0, "",
-		// 	"rtp://127.0.0.1:5006",
-		// 	map[string]string{"c:a": "libopus", "vn": "", "f": "rtp"},
-		// )
-	}
+	// your existing webcam + mic
+	go runFFmpegCLI(
+		"/dev/video0", "v4l2", 30, "640x480",
+		"rtp://127.0.0.1:5004",
+		map[string]string{"c:v": "libx264", "preset": "ultrafast", "tune": "zerolatency", "pix_fmt": "yuv420p", "an": "", "f": "rtp", "payload_type": "109"},
+	)
+	// go runFFmpegCLI(
+	// 	"default", "alsa", 0, "",
+	// 	"rtp://127.0.0.1:5006",
+	// 	map[string]string{"c:a": "libopus", "vn": "", "f": "rtp"},
+	// )
 
 	// wait for CTRL+C
 	sig := make(chan os.Signal, 1)
@@ -208,91 +177,6 @@ func runFFmpegCLI(input, format string, fps int, size, output string, outArgs ma
 		log.Fatalf("ffmpeg failed: %v", err)
 	}
 }
-
-// runFFmpegFileWithDetection opens inputFile, runs Haar-cascade face detection,
-// draws rectangles, and pipes the annotated frames into FFmpeg which sends RTP to output.
-// func runFFmpegFileWithDetection(
-// 	inputFile string, // path to video file
-// 	cascadeXML string, // e.g. "haarcascade_frontalface_default.xml"
-// 	width, height, fps int,
-// 	output string, // e.g. "rtp://127.0.0.1:5004"
-// 	outArgs map[string]string,
-// ) {
-// 	// 1) Load classifier
-// 	classifier := gocv.NewCascadeClassifier()
-// 	defer classifier.Close()
-// 	if !classifier.Load(cascadeXML) {
-// 		log.Fatalf("Error loading cascade file: %s", cascadeXML)
-// 	}
-
-// 	// 2) Open video file
-// 	vc, err := gocv.VideoCaptureFile(inputFile)
-// 	if err != nil {
-// 		log.Fatalf("Error opening video file: %v", err)
-// 	}
-// 	defer vc.Close()
-
-// 	// 3) Prepare mat and rectangle color
-// 	img := gocv.NewMat()
-// 	defer img.Close()
-// 	rectColor := color.RGBA{G: 255, A: 0}
-
-// 	// 4) Build FFmpeg command to read rawvideo from stdin
-// 	args := []string{
-// 		"-hide_banner", "-loglevel", "warning",
-// 		"-f", "rawvideo", "-pix_fmt", "bgr24",
-// 		"-s", fmt.Sprintf("%dx%d", width, height),
-// 		"-r", fmt.Sprint(fps),
-// 		"-i", "pipe:0",
-// 	}
-// 	for flag, val := range outArgs {
-// 		f := flag
-// 		if !strings.HasPrefix(f, "-") {
-// 			f = "-" + f
-// 		}
-// 		args = append(args, f)
-// 		if val != "" {
-// 			args = append(args, val)
-// 		}
-// 	}
-// 	args = append(args, output)
-
-// 	cmd := exec.Command("ffmpeg", args...)
-// 	stdin, err := cmd.StdinPipe()
-// 	if err != nil {
-// 		log.Fatalf("Error getting stdin pipe for ffmpeg: %v", err)
-// 	}
-// 	cmd.Stdout = os.Stdout
-// 	cmd.Stderr = os.Stderr
-
-// 	if err := cmd.Start(); err != nil {
-// 		log.Fatalf("Failed to start ffmpeg: %v", err)
-// 	}
-
-// 	// 5) Read frames, detect, draw, and write into FFmpeg
-// 	for {
-// 		if ok := vc.Read(&img); !ok || img.Empty() {
-// 			break // end of file
-// 		}
-// 		// optionally resize if source isn't the exact width/height
-// 		if img.Cols() != width || img.Rows() != height {
-// 			gocv.Resize(img, &img, image.Pt(width, height), 0, 0, gocv.InterpolationDefault)
-// 		}
-// 		// face detection
-// 		rects := classifier.DetectMultiScale(img)
-// 		for _, r := range rects {
-// 			gocv.Rectangle(&img, r, rectColor, 3)
-// 		}
-// 		// write raw BGR bytes to ffmpeg
-// 		if _, err := stdin.Write(img.ToBytes()); err != nil {
-// 			log.Printf("Error writing frame to ffmpeg: %v", err)
-// 			break
-// 		}
-// 	}
-
-// 	stdin.Close()
-// 	cmd.Wait()
-// }
 
 // runFFmpegFileCLI streams a local file at realtime speed (-re) into a single RTP output URL.
 func runFFmpegFileCLI(inputFile, output string, outArgs map[string]string) {
@@ -369,48 +253,96 @@ func pumpRTP(addr string, track *webrtc.TrackLocalStaticRTP, payloadType uint8) 
 	}
 }
 
-// handleSignal processes join/offer/answer/candidate messages
-func handleSignal(ws *websocket.Conn, api *webrtc.API, myID, room string, msg map[string]interface{}) {
+// handleSignal processes join/offer/answer/candidate/leave messages
+func handleSignal(
+	ws *websocket.Conn,
+	api *webrtc.API,
+	myID, room string,
+	msg map[string]interface{},
+) {
 	typ, _ := msg["type"].(string)
 	from, _ := msg["from"].(string)
 	to, _ := msg["to"].(string)
 
-	// ignore messages not for us (except join)
+	// always allow join messages, but drop everything else not addressed to us
 	if typ != "join" && to != myID {
 		return
 	}
-	// ignore our own join echoes
+	// ignore our own join echos
 	if typ == "join" && from == myID {
 		return
 	}
 
-	switch typ {
-	case "join":
-		// new peer joined → create PC + send offer
-		log.Printf("Peer %s joined, creating PC and sending offer", from)
+	// helper to get-or-create PC
+	getOrCreatePC := func() *webrtc.PeerConnection {
+		if pc := peers[from]; pc != nil {
+			return pc
+		}
 		pc := createPeerConnection(api, myID, from, room, ws)
 		peers[from] = pc
-		sendOffer(ws, pc, myID, from, room)
+		return pc
+	}
 
+	// polite-peer: lower lexical ID wins
+	polite := myID < from
+
+	switch typ {
+	case "join":
+		log.Printf("Peer %s joined → creating PC & sending offer", from)
+		pc := getOrCreatePC()
+		// mark that we're about to make an offer
+		makingOffer[from] = true
+		sendOffer(ws, pc, myID, from, room)
 	case "offer":
-		// incoming offer → create or reuse PC, set remote, then answer
 		log.Printf("Received offer from %s", from)
-		pc, ok := peers[from]
-		if !ok {
-			pc = createPeerConnection(api, myID, from, room, ws)
-			peers[from] = pc
+		pc := getOrCreatePC()
+
+		collision := makingOffer[from] || pc.SignalingState() != webrtc.SignalingStateStable
+		ignoreOffer := !polite && collision
+		if ignoreOffer {
+			log.Printf("Ignoring offer from %s (collision)", from)
+			return
 		}
-		offer := msg["offer"].(map[string]interface{})
-		sdp := offer["sdp"].(string)
-		pc.SetRemoteDescription(webrtc.SessionDescription{
-			Type: webrtc.SDPTypeOffer, SDP: sdp,
-		})
+		if collision {
+			// rollback our unfinished local description
+			if err := pc.SetLocalDescription(
+				webrtc.SessionDescription{Type: webrtc.SDPTypeRollback},
+			); err != nil {
+				log.Printf("Rollback error: %v", err)
+			}
+		}
+
+		// apply remote offer
+		rawOffer := msg["offer"].(map[string]interface{})
+		sdp := rawOffer["sdp"].(string)
+		if err := pc.SetRemoteDescription(
+			webrtc.SessionDescription{Type: webrtc.SDPTypeOffer, SDP: sdp},
+		); err != nil {
+			log.Printf("SetRemoteDescription error: %v", err)
+			return
+		}
+
+		// flush any queued ICE candidates
+		for _, cand := range queuedCandidates[from] {
+			if err := pc.AddICECandidate(cand); err != nil {
+				log.Printf("Queued AddICECandidate error: %v", err)
+			}
+		}
+		queuedCandidates[from] = nil
+
+		// answer
 		answer, err := pc.CreateAnswer(nil)
 		if err != nil {
 			log.Printf("CreateAnswer error: %v", err)
 			return
 		}
-		pc.SetLocalDescription(answer)
+		if err := pc.SetLocalDescription(answer); err != nil {
+			log.Printf("SetLocalDescription(answer) error: %v", err)
+			return
+		}
+		// answered, so no longer making an offer
+		makingOffer[from] = false
+
 		ws.WriteJSON(map[string]interface{}{
 			"type":   "answer",
 			"answer": pc.LocalDescription(),
@@ -419,27 +351,54 @@ func handleSignal(ws *websocket.Conn, api *webrtc.API, myID, room string, msg ma
 			"room":   room,
 			"name":   "robot",
 		})
-
 	case "answer":
-		// incoming answer → finish handshake
 		log.Printf("Received answer from %s", from)
-		answer := msg["answer"].(map[string]interface{})
-		sdp := answer["sdp"].(string)
-		peers[from].SetRemoteDescription(webrtc.SessionDescription{
-			Type: webrtc.SDPTypeAnswer, SDP: sdp,
-		})
-
+		pc := peers[from]
+		if pc == nil {
+			log.Printf("No PC found for %s on answer", from)
+			return
+		}
+		rawAns := msg["answer"].(map[string]interface{})
+		sdp := rawAns["sdp"].(string)
+		if err := pc.SetRemoteDescription(
+			webrtc.SessionDescription{Type: webrtc.SDPTypeAnswer, SDP: sdp},
+		); err != nil {
+			log.Printf("SetRemoteDescription(answer) error: %v", err)
+		}
+		// flush any queued ICE candidates
+		for _, cand := range queuedCandidates[from] {
+			if err := pc.AddICECandidate(cand); err != nil {
+				log.Printf("Queued AddICECandidate error: %v", err)
+			}
+		}
+		queuedCandidates[from] = nil
 	case "candidate":
-		// incoming ICE → add to PC
-		cand := msg["candidate"].(map[string]interface{})
+		raw := msg["candidate"].(map[string]interface{})
 		ice := webrtc.ICECandidateInit{
-			Candidate:     cand["candidate"].(string),
-			SDPMid:        ptrString(cand["sdpMid"].(string)),
-			SDPMLineIndex: ptrUint16(uint16(cand["sdpMLineIndex"].(float64))),
+			Candidate:     raw["candidate"].(string),
+			SDPMid:        ptrString(raw["sdpMid"].(string)),
+			SDPMLineIndex: ptrUint16(uint16(raw["sdpMLineIndex"].(float64))),
 		}
-		if pc, ok := peers[from]; ok {
-			pc.AddICECandidate(ice)
+
+		pc := peers[from]
+		// if remote not set yet, buffer it
+		if pc == nil || pc.RemoteDescription() == nil {
+			queuedCandidates[from] = append(queuedCandidates[from], ice)
+		} else {
+			if err := pc.AddICECandidate(ice); err != nil {
+				log.Printf("AddICECandidate error: %v", err)
+			}
 		}
+	case "leave":
+		log.Printf("Peer %s left → cleaning up", from)
+		if pc := peers[from]; pc != nil {
+			pc.Close()
+			delete(peers, from)
+			delete(makingOffer, from)
+			delete(queuedCandidates, from)
+		}
+	default:
+		// unknown message types are ignored
 	}
 }
 
@@ -483,11 +442,14 @@ func createPeerConnection(
 		})
 	})
 
-	pc.OnICEConnectionStateChange(func(s webrtc.ICEConnectionState) {
-		log.Printf("🔗 ICE state with %s: %s", peerID, s.String())
-	})
 	pc.OnConnectionStateChange(func(s webrtc.PeerConnectionState) {
 		log.Printf("🏓 PeerConnection state with %s: %s", peerID, s.String())
+	})
+
+	pc.OnICEConnectionStateChange(func(s webrtc.ICEConnectionState) {
+		if s == webrtc.ICEConnectionStateFailed {
+			restartICE(pc, ws, myID, peerID, room)
+		}
 	})
 
 	return pc
@@ -513,3 +475,23 @@ func sendOffer(ws *websocket.Conn, pc *webrtc.PeerConnection, myID, peerID, room
 // helpers for pointers
 func ptrString(s string) *string { return &s }
 func ptrUint16(u uint16) *uint16 { return &u }
+
+func restartICE(pc *webrtc.PeerConnection, ws *websocket.Conn, myID, peerID, room string) {
+	offer, err := pc.CreateOffer(&webrtc.OfferOptions{ICERestart: true})
+	if err != nil {
+		log.Println("ICE-restart CreateOffer:", err)
+		return
+	}
+	if err := pc.SetLocalDescription(offer); err != nil {
+		log.Println("ICE-restart SetLocalDesc:", err)
+		return
+	}
+	ws.WriteJSON(map[string]interface{}{
+		"type":  "offer",
+		"offer": pc.LocalDescription(),
+		"from":  myID,
+		"to":    peerID,
+		"room":  room,
+	})
+	log.Printf("▶ ICE-restart sent to %s", peerID)
+}
