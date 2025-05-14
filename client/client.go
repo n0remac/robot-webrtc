@@ -1,8 +1,10 @@
 package main
 
 import (
+	"encoding/json"
 	"flag"
 	"fmt"
+	"io/ioutil"
 	"log"
 	"net"
 	"net/http"
@@ -10,6 +12,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -18,122 +21,105 @@ import (
 	"github.com/pion/webrtc/v4"
 )
 
+// TURN credentials struct
+type turnCreds struct {
+	Username   string   `json:"username"`
+	Credential string   `json:"password"`
+	URLs       []string `json:"uris"`
+}
+
 // global state
 var (
+	peersMu          sync.Mutex
 	peers            = make(map[string]*webrtc.PeerConnection)
+	makingOfferMu    sync.Mutex
+	makingOffer      = make(map[string]bool)
+	queuedCandsMu    sync.Mutex
+	queuedCandidates = make(map[string][]webrtc.ICECandidateInit)
+	globalIceServers []webrtc.ICEServer
 	videoTrack       *webrtc.TrackLocalStaticRTP
 	audioTrack       *webrtc.TrackLocalStaticRTP
-	makingOffer      = make(map[string]bool)
-	queuedCandidates = make(map[string][]webrtc.ICECandidateInit)
 )
 
 func main() {
-	// --- CLI flags ---
-	// server := flag.String("server", "ws://localhost:8080/ws/hub", "signaling server URL")
+	// CLI flags
 	server := flag.String("server", "wss://noremac.dev/ws/hub", "signaling server URL")
-	//xmlFile := flag.String("cascade", "haarcascade_frontalface_default.xml", "path to Haar cascade XML")
-	// file := flag.String("file", "", "path to a local video file to stream instead of webcam")
 	room := flag.String("room", "default", "room name")
-	id := flag.String("id", "", "your unique client ID")
+	id := flag.String("id", "", "unique client ID")
 	flag.Parse()
 
+	// generate ID if none provided
 	if *id == "" {
 		*id = fmt.Sprintf("%d", time.Now().UnixNano())
 	}
 	myID := *id
 	log.Printf("My ID: %s", myID)
 
-	// --- 2) Prepare static‐RTP tracks ---
+	// fetch TURN credentials and build ICE servers
+	serverBase := strings.TrimSuffix(strings.TrimPrefix(*server, "wss://"), "/ws/hub")
+	creds, err := fetchTurnCredentials("https://" + serverBase + "/turn-credentials")
+	if err != nil {
+		log.Printf("Warning: could not fetch TURN creds: %v", err)
+	}
+	globalIceServers = []webrtc.ICEServer{{URLs: []string{"stun:stun.l.google.com:19302"}}}
+	if creds != nil {
+		for _, uri := range creds.URLs {
+			globalIceServers = append(globalIceServers,
+				webrtc.ICEServer{URLs: []string{uri}, Username: creds.Username, Credential: creds.Credential},
+			)
+		}
+	}
+
+	// prepare static-RTP tracks
 	m := webrtc.MediaEngine{}
-
-	// Only H264 @ PT 96
-	m.RegisterCodec(
-		webrtc.RTPCodecParameters{
-			RTPCodecCapability: webrtc.RTPCodecCapability{
-				MimeType:    webrtc.MimeTypeH264,
-				ClockRate:   90000,
-				SDPFmtpLine: "packetization-mode=1;profile-level-id=42e01f",
-			},
-			PayloadType: 109,
-		},
-		webrtc.RTPCodecTypeVideo,
-	)
-
-	// Only Opus @ PT 97
-	m.RegisterCodec(
-		webrtc.RTPCodecParameters{
-			RTPCodecCapability: webrtc.RTPCodecCapability{
-				MimeType:  webrtc.MimeTypeOpus,
-				ClockRate: 48000,
-				Channels:  2,
-			},
-			PayloadType: 111,
-		},
-		webrtc.RTPCodecTypeAudio,
-	)
-
+	m.RegisterCodec(webrtc.RTPCodecParameters{
+		RTPCodecCapability: webrtc.RTPCodecCapability{MimeType: webrtc.MimeTypeH264, ClockRate: 90000, SDPFmtpLine: "packetization-mode=1;profile-level-id=42e01f"},
+		PayloadType:        109,
+	}, webrtc.RTPCodecTypeVideo)
+	m.RegisterCodec(webrtc.RTPCodecParameters{
+		RTPCodecCapability: webrtc.RTPCodecCapability{MimeType: webrtc.MimeTypeOpus, ClockRate: 48000, Channels: 2},
+		PayloadType:        111,
+	}, webrtc.RTPCodecTypeAudio)
 	api := webrtc.NewAPI(webrtc.WithMediaEngine(&m))
 
-	var err error
-	videoTrack, err = webrtc.NewTrackLocalStaticRTP(
-		webrtc.RTPCodecCapability{MimeType: "video/H264"}, "video", "pion-video",
-	)
+	// create local RTP tracks
+	videoTrack, err = webrtc.NewTrackLocalStaticRTP(webrtc.RTPCodecCapability{MimeType: "video/H264"}, "video", "pion-video")
 	if err != nil {
 		log.Fatalf("NewTrackLocalStaticRTP(video): %v", err)
 	}
-	audioTrack, err = webrtc.NewTrackLocalStaticRTP(
-		webrtc.RTPCodecCapability{MimeType: "audio/opus"}, "audio", "pion-audio",
-	)
+	audioTrack, err = webrtc.NewTrackLocalStaticRTP(webrtc.RTPCodecCapability{MimeType: "audio/opus"}, "audio", "pion-audio")
 	if err != nil {
 		log.Fatalf("NewTrackLocalStaticRTP(audio): %v", err)
 	}
 
-	// --- 3) Connect to signaling server ---
-	wsURL := fmt.Sprintf("%s?room=%s", *server, *room)
-	headers := http.Header{
-		"Origin": []string{"https://noremac.dev"},
-	}
-	fmt.Println("Connecting to", wsURL)
-	ws, _, err := websocket.DefaultDialer.Dial(wsURL, headers)
-	if err != nil {
-		log.Fatalf("WebSocket dial error: %v", err)
-	}
-	defer ws.Close()
+	// handle graceful shutdown
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
 
-	// send our join message
-	ws.WriteJSON(map[string]interface{}{
-		"join": myID, "from": myID, "room": *room, "type": "join",
-	})
-
-	// read incoming messages
+	// connect and maintain signalling
 	go func() {
 		for {
-			var msg map[string]interface{}
-			if err := ws.ReadJSON(&msg); err != nil {
-				log.Printf("WebSocket read error: %v", err)
-				return
+			if err := connectAndSignal(api, myID, *room, *server); err != nil {
+				log.Printf("Signal loop exited with: %v; retrying in 1s...", err)
 			}
-			handleSignal(ws, api, myID, *room, msg)
+			time.Sleep(time.Second)
 		}
 	}()
 
-	// your existing webcam + mic
+	// start FFmpeg push
 	go runFFmpegCLI(
 		"/dev/video0", "v4l2", 30, "640x480",
 		"rtp://127.0.0.1:5004",
 		map[string]string{"c:v": "libx264", "preset": "ultrafast", "tune": "zerolatency", "pix_fmt": "yuv420p", "an": "", "f": "rtp", "payload_type": "109"},
 	)
-	// go runFFmpegCLI(
-	// 	"default", "alsa", 0, "",
-	// 	"rtp://127.0.0.1:5006",
-	// 	map[string]string{"c:a": "libopus", "vn": "", "f": "rtp"},
-	// )
 
-	// wait for CTRL+C
-	sig := make(chan os.Signal, 1)
-	signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM)
-	<-sig
-	log.Println("Closing down")
+	<-sigCh
+	log.Println("Shutting down: sending leave & closing peers...")
+	peersMu.Lock()
+	for _, pc := range peers {
+		pc.Close()
+	}
+	peersMu.Unlock()
 }
 
 func runFFmpegCLI(input, format string, fps int, size, output string, outArgs map[string]string) {
@@ -494,4 +480,47 @@ func restartICE(pc *webrtc.PeerConnection, ws *websocket.Conn, myID, peerID, roo
 		"room":  room,
 	})
 	log.Printf("▶ ICE-restart sent to %s", peerID)
+}
+
+// connectAndSignal manages WebSocket signalling (with auto-reconnect)
+func connectAndSignal(api *webrtc.API, myID, room, wsURL string) error {
+	// dial
+	ws, _, err := websocket.DefaultDialer.Dial(fmt.Sprintf("%s?room=%s", wsURL, room), nil)
+	if err != nil {
+		return err
+	}
+	defer ws.Close()
+
+	// send join
+	ws.WriteJSON(map[string]interface{}{"type": "join", "join": myID, "from": myID, "room": room})
+
+	// read loop
+	for {
+		var msg map[string]interface{}
+		if err := ws.ReadJSON(&msg); err != nil {
+			return err
+		}
+		handleSignal(ws, api, myID, room, msg)
+	}
+}
+
+// fetchTurnCredentials GETs the TURN credentials JSON
+func fetchTurnCredentials(url string) (*turnCreds, error) {
+	resp, err := http.Get(url)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("TURN endpoint returned %d", resp.StatusCode)
+	}
+	body, err := ioutil.ReadAll(resp.Body)
+	if err != nil {
+		return nil, err
+	}
+	var creds turnCreds
+	if err := json.Unmarshal(body, &creds); err != nil {
+		return nil, err
+	}
+	return &creds, nil
 }
