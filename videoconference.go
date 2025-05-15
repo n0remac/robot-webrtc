@@ -199,6 +199,7 @@ func VideoPage(w http.ResponseWriter, r *http.Request) {
 					Button(Id("mute-btn"), Class("btn btn-sm"), T("Mute")),
 					Button(Id("video-btn"), Class("btn btn-sm"), T("Stop Video")),
 					Button(Id("noise-btn"), Class("btn btn-sm"), T("Noise Suppression")),
+					Span(Id("w-status"), Class("text-sm text-gray-300"), T("W: up")),
 				),
 			),
 		),

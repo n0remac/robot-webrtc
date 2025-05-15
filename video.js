@@ -1,6 +1,8 @@
 const domainName = window.location.hostname === "localhost" ? "localhost:8080" : "noremac.dev";
 const wsProtocol = window.location.protocol === "https:" ? "wss" : "ws";
 const ROOM = new URLSearchParams(location.search).get("room") || "default";
+const dataChannels = {};
+
 
 const Logger = (() => {
     let enabled = false;              // controlled by server
@@ -332,6 +334,27 @@ function createPeerConnection(peerId) {
     pc.ignoreOffer = false;
     const polite = myUUID < peerId;
     let negotiating = false;
+
+    // create an *outgoing* data‐channel
+    const dc = pc.createDataChannel('keyboard');
+    dataChannels[peerId] = dc;
+
+    dc.onopen = () =>
+      Logger.info('keyboard DataChannel open', { peer: peerId });
+    dc.onmessage = e => {
+      const msg = JSON.parse(e.data);
+      handleRemoteKey(msg.key, msg.action, peerId);
+    };
+
+    // accept an *incoming* data‐channel
+    pc.ondatachannel = ({ channel }) => {
+      dataChannels[peerId] = channel;
+      channel.onopen    = () => Logger.info('incoming channel open', { peer: peerId });
+      channel.onmessage = e => {
+        const msg = JSON.parse(e.data);
+        handleRemoteKey(msg.key, msg.action, peerId);
+      };
+    };
   
     // buffer any early ICE candidates here
     pc.queuedCandidates = [];
@@ -450,3 +473,36 @@ function createPeerConnection(peerId) {
   localStream.getTracks().forEach(t => pc.addTrack(t, localStream));
   return pc;
 }
+
+function createKeyPressEventListener(key, callback) {
+  const normalized = key.toLowerCase();
+
+  function handler(e) {
+    if (e.key && e.key.toLowerCase() === normalized) {
+      e.preventDefault();
+      e.stopImmediatePropagation();
+
+      const action = e.type === 'keydown' ? 'pressed' : 'released';
+      console.log(`Key ${normalized} ${action}`);
+      callback(action, normalized);
+
+      // broadcast to each peer
+      Object.values(dataChannels).forEach(dc => {
+        if (dc.readyState === 'open') {
+          dc.send(JSON.stringify({ key: normalized, action }));
+        }
+      });
+    }
+  }
+
+  window.addEventListener('keydown', handler, true);
+  window.addEventListener('keyup',   handler, true);
+}
+
+// bind all five keys
+;['w','a','s','d'].forEach(k =>
+  createKeyPressEventListener(k, (action, e) => {
+    // send data over WebRTC
+
+  })
+);
