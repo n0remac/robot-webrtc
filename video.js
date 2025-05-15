@@ -489,6 +489,7 @@ function createKeyPressEventListener(key, callback) {
       // broadcast to each peer
       Object.values(dataChannels).forEach(dc => {
         if (dc.readyState === 'open') {
+          console.log(`Sending ${action} event to ${dc.label}`);
           dc.send(JSON.stringify({ key: normalized, action }));
         }
       });
@@ -502,7 +503,5 @@ function createKeyPressEventListener(key, callback) {
 // bind all five keys
 ;['w','a','s','d'].forEach(k =>
   createKeyPressEventListener(k, (action, e) => {
-    // send data over WebRTC
-
   })
 );
