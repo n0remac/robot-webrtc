@@ -92,6 +92,10 @@ func main() {
 		log.Fatalf("NewTrackLocalStaticRTP(audio): %v", err)
 	}
 
+	// pump RTP
+	go pumpRTP("[::]:5004", videoTrack, 109)
+	go pumpRTP("[::]:5006", audioTrack, 111)
+
 	// handle graceful shutdown
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
@@ -486,10 +490,6 @@ func createPeerConnection(
 	if _, err := pc.AddTrack(audioTrack); err != nil {
 		log.Fatalf("AddTrack audio: %v", err)
 	}
-
-	// pump RTP
-	go pumpRTP("[::]:5004", videoTrack, 109)
-	go pumpRTP("[::]:5006", audioTrack, 111)
 
 	return pc
 }
