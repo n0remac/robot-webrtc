@@ -393,7 +393,6 @@ func handleSignal(
 	}
 }
 
-// createPeerConnection builds a new PC, adds tracks & ICE handler
 func createPeerConnection(
 	api *webrtc.API,
 	myID, peerID, room string,
@@ -405,6 +404,32 @@ func createPeerConnection(
 	if err != nil {
 		log.Fatalf("NewPeerConnection error: %v", err)
 	}
+
+	pc.OnDataChannel(func(dc *webrtc.DataChannel) {
+		log.Printf("▶︎ DataChannel '%s' from %s", dc.Label(), peerID)
+
+		// optional: know when it’s open
+		dc.OnOpen(func() {
+			log.Printf("✔︎ DataChannel '%s' open", dc.Label())
+		})
+
+		// log every message
+		dc.OnMessage(func(msg webrtc.DataChannelMessage) {
+			// raw string:
+			log.Printf("← msg on '%s' from %s: %s",
+				dc.Label(), peerID, string(msg.Data))
+
+			// if you want to parse your JSON {key,action}:
+			var m struct {
+				Key    string `json:"key"`
+				Action string `json:"action"`
+			}
+			if err := json.Unmarshal(msg.Data, &m); err == nil {
+				log.Printf("    → parsed: Key=%s, Action=%s", m.Key, m.Action)
+			}
+		})
+	})
+
 	pc.OnNegotiationNeeded(func() {
 		makingOfferMu.Lock()
 		makingOffer[peerID] = true
