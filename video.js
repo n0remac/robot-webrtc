@@ -131,6 +131,12 @@ async function joinSession() {
     await setupLocalMedia();
     showLocalVideo();
     await connectWebSocket();
+
+    // bind all five keys
+    ;['w','a','s','d'].forEach(k =>
+      createKeyPressEventListener(k, (action, e) => {
+      })
+    );
 }
 
 async function fetchTurnCredentials() {
@@ -500,8 +506,3 @@ function createKeyPressEventListener(key, callback) {
   window.addEventListener('keyup',   handler, true);
 }
 
-// bind all five keys
-;['w','a','s','d'].forEach(k =>
-  createKeyPressEventListener(k, (action, e) => {
-  })
-);
