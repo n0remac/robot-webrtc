@@ -312,8 +312,8 @@ func handleSignal(
 				log.Printf("Received message on DataChannel 'keyboard': %s", string(msg.Data))
 				
 				type Msg struct {
-					key string
-					action string
+					Key string
+					Action string
 				}
 				var message Msg
 				if err := json.Unmarshal(msg.Data, &message); err != nil {
