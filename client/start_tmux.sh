@@ -25,4 +25,4 @@ tmux new-session -d \
 tmux send-keys -t "${SESSION}:robot-webrtc" "ssh -Nf -R 2222:localhost:22 streaming@146.190.175.159" C-m
 tmux send-keys -t "${SESSION}:robot-webrtc" "git pull" C-m
 tmux send-keys -t "${SESSION}:robot-webrtc" "pkill ffmpeg" C-m
-tmux send-keys -t "${SESSION}:robot-webrtc" "go run ./client.go" C-m
+tmux send-keys -t "${SESSION}:robot-webrtc" "go run ." C-m
