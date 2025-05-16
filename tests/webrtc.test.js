@@ -30,8 +30,8 @@ const scenarios = [
 
 // ✅ Reusable test function
 async function runWebRTCJoinFlowTest(deviceA, deviceB, room, nameA, nameB) {
-  const BASE_URL = `http://localhost:8080/video`;
-  // const BASE_URL = `https://noremac.dev/video`;
+  // const BASE_URL = `http://localhost:8080/video`;
+  const BASE_URL = `https://noremac.dev/video`;
 
   const browser = await chromium.launch({ headless: false });
 
