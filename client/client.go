@@ -360,11 +360,11 @@ func handleSignal(
 				case "w":
 					if message.Action == "pressed" {
 						log.Println("w key pressed")
-						m1.Forward(50)
-						m3.Reverse(50)
+						m1.Forward(100)
+						m3.Reverse(100)
 						
-						m2.Reverse(50)
-						m4.Reverse(50)
+						m2.Reverse(100)
+						m4.Reverse(100)
 					} else if message.Action == "released" {
 						log.Println("w key released")
 						m1.Stop()
@@ -376,11 +376,11 @@ func handleSignal(
 					log.Println("Backward command received")
 					if message.Action == "pressed" {
 						log.Println("s key pressed")
-						m1.Reverse(50)
-						m3.Forward(50)
+						m1.Reverse(100)
+						m3.Forward(100)
 
-						m2.Forward(50)
-						m4.Forward(50)
+						m2.Forward(100)
+						m4.Forward(100)
 					} else if message.Action == "released" {
 						log.Println("s key released")
 						m1.Stop()
@@ -392,8 +392,8 @@ func handleSignal(
 					log.Println("a key pressed")
 					if message.Action == "pressed" {
 						log.Println("a key pressed")
-						m1.Reverse(50)
-						m2.Forward(50)
+						m1.Reverse(100)
+						m2.Forward(100)
 					} else if message.Action == "released" {
 						log.Println("a key released")
 						m1.Stop()
@@ -403,8 +403,8 @@ func handleSignal(
 					log.Println("d key pressed")
 					if message.Action == "pressed" {
 						log.Println("d key pressed")
-						m3.Forward(50)
-						m4.Forward(50)
+						m3.Forward(100)
+						m4.Forward(100)
 					} else if message.Action == "released" {
 						log.Println("d key released")
 						m3.Stop()
