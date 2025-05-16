@@ -47,19 +47,25 @@ var (
 )
 
 func main() {
-	// 1) Initialize host drivers
+	// 1) Init Periph
 	if _, err := host.Init(); err != nil {
 		log.Fatal("host.Init:", err)
 	}
 
-	// 2) Open the I²C bus
-	bus, err := i2creg.Open("")
+	// 2) Open I²C bus #1
+	bus, err := i2creg.Open("1")
 	if err != nil {
 		log.Fatal("i2creg.Open:", err)
 	}
 	defer bus.Close()
 
-	// 3) Create PCA9685 and set it up for 50 Hz
+	// 3) Software reset the PCA9685 (General Call 0x06)
+	if err := bus.Tx(0x00, []byte{0x06}, nil); err != nil {
+		log.Println("PCA9685 SWRST failed:", err)
+	}
+	time.Sleep(10 * time.Millisecond)
+
+	// 4) Now create & configure the driver
 	pca, err := pca9685.NewI2C(bus, pca9685.I2CAddr)
 	if err != nil {
 		log.Fatal("pca9685.NewI2C:", err)
@@ -70,8 +76,6 @@ func main() {
 	if err := pca.SetAllPwm(0, 0); err != nil {
 		log.Fatal("SetAllPwm:", err)
 	}
-
-	// 4) Build a ServoGroup (0°–180° from tick 50→650)
 	servos := pca9685.NewServoGroup(pca, 50, 650, 0, 180)
 
 	if err := rpio.Open(); err != nil {
