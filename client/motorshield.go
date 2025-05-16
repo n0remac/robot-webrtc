@@ -377,21 +377,15 @@ func main() {
 	}
 	defer rpio.Close()
 
-	// Example: two motors linked
 	m1 := NewMotor("MOTOR1", 1)
 	m2 := NewMotor("MOTOR2", 1)
-	group := NewLinkedMotors(m1, m2)
+    m3 := NewMotor("MOTOR3", 1)
+    m4 := NewMotor("MOTOR4", 1)
 
-	group.Forward(75) // 75% speed
+	m1.Forward(75)
+    m2.Reverse(75)
+    m3.Forward(75)
+    m4.Reverse(75)
 	time.Sleep(3 * time.Second)
-	group.Stop()
-
-	// Example: stepper
-	st := NewStepper("STEPPER1")
-	st.Forward(5, 100) // 5 ms delay, 100 steps
-	st.Stop()
-
-	// Example: sensor
-	s := NewSensor("ULTRASONIC", 20.0) // 20 cm boundary
-	s.Trigger()
+    
 }
