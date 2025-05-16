@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"flag"
 	"fmt"
 	"io/ioutil"
 	"log"
@@ -9,8 +10,10 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"os/signal"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/gorilla/websocket"
@@ -38,91 +41,91 @@ var (
 	audioTrack       *webrtc.TrackLocalStaticRTP
 )
 
-// func main() {
-// 	// CLI flags
-// 	// server := flag.String("server", "wss://noremac.dev/ws/hub", "signaling server URL")
-// 	server := flag.String("server", "ws://localhost:8080/ws/hub", "signaling server URL")
-// 	room := flag.String("room", "default", "room name")
-// 	id := flag.String("id", "", "unique client ID")
-// 	flag.Parse()
+func main() {
+	// CLI flags
+	// server := flag.String("server", "wss://noremac.dev/ws/hub", "signaling server URL")
+	server := flag.String("server", "ws://localhost:8080/ws/hub", "signaling server URL")
+	room := flag.String("room", "default", "room name")
+	id := flag.String("id", "", "unique client ID")
+	flag.Parse()
 
-// 	// generate ID if none provided
-// 	if *id == "" {
-// 		*id = fmt.Sprintf("%d", time.Now().UnixNano())
-// 	}
-// 	myID := *id
-// 	log.Printf("My ID: %s", myID)
+	// generate ID if none provided
+	if *id == "" {
+		*id = fmt.Sprintf("%d", time.Now().UnixNano())
+	}
+	myID := *id
+	log.Printf("My ID: %s", myID)
 
-// 	// fetch TURN credentials and build ICE servers
-// 	serverBase := strings.TrimSuffix(strings.TrimPrefix(*server, "wss://"), "/ws/hub")
-// 	creds, err := fetchTurnCredentials("https://" + serverBase + "/turn-credentials")
-// 	if err != nil {
-// 		log.Printf("Warning: could not fetch TURN creds: %v", err)
-// 	}
-// 	globalIceServers = []webrtc.ICEServer{{URLs: []string{"stun:stun.l.google.com:19302"}}}
-// 	if creds != nil {
-// 		for _, uri := range creds.URLs {
-// 			globalIceServers = append(globalIceServers,
-// 				webrtc.ICEServer{URLs: []string{uri}, Username: creds.Username, Credential: creds.Credential},
-// 			)
-// 		}
-// 	}
+	// fetch TURN credentials and build ICE servers
+	serverBase := strings.TrimSuffix(strings.TrimPrefix(*server, "wss://"), "/ws/hub")
+	creds, err := fetchTurnCredentials("https://" + serverBase + "/turn-credentials")
+	if err != nil {
+		log.Printf("Warning: could not fetch TURN creds: %v", err)
+	}
+	globalIceServers = []webrtc.ICEServer{{URLs: []string{"stun:stun.l.google.com:19302"}}}
+	if creds != nil {
+		for _, uri := range creds.URLs {
+			globalIceServers = append(globalIceServers,
+				webrtc.ICEServer{URLs: []string{uri}, Username: creds.Username, Credential: creds.Credential},
+			)
+		}
+	}
 
-// 	// prepare static-RTP tracks
-// 	m := webrtc.MediaEngine{}
-// 	m.RegisterCodec(webrtc.RTPCodecParameters{
-// 		RTPCodecCapability: webrtc.RTPCodecCapability{MimeType: webrtc.MimeTypeH264, ClockRate: 90000, SDPFmtpLine: "packetization-mode=1;profile-level-id=42e01f"},
-// 		PayloadType:        109,
-// 	}, webrtc.RTPCodecTypeVideo)
-// 	m.RegisterCodec(webrtc.RTPCodecParameters{
-// 		RTPCodecCapability: webrtc.RTPCodecCapability{MimeType: webrtc.MimeTypeOpus, ClockRate: 48000, Channels: 2},
-// 		PayloadType:        111,
-// 	}, webrtc.RTPCodecTypeAudio)
-// 	api := webrtc.NewAPI(webrtc.WithMediaEngine(&m))
+	// prepare static-RTP tracks
+	m := webrtc.MediaEngine{}
+	m.RegisterCodec(webrtc.RTPCodecParameters{
+		RTPCodecCapability: webrtc.RTPCodecCapability{MimeType: webrtc.MimeTypeH264, ClockRate: 90000, SDPFmtpLine: "packetization-mode=1;profile-level-id=42e01f"},
+		PayloadType:        109,
+	}, webrtc.RTPCodecTypeVideo)
+	m.RegisterCodec(webrtc.RTPCodecParameters{
+		RTPCodecCapability: webrtc.RTPCodecCapability{MimeType: webrtc.MimeTypeOpus, ClockRate: 48000, Channels: 2},
+		PayloadType:        111,
+	}, webrtc.RTPCodecTypeAudio)
+	api := webrtc.NewAPI(webrtc.WithMediaEngine(&m))
 
-// 	// create local RTP tracks
-// 	videoTrack, err = webrtc.NewTrackLocalStaticRTP(webrtc.RTPCodecCapability{MimeType: "video/H264"}, "video", "pion-video")
-// 	if err != nil {
-// 		log.Fatalf("NewTrackLocalStaticRTP(video): %v", err)
-// 	}
-// 	audioTrack, err = webrtc.NewTrackLocalStaticRTP(webrtc.RTPCodecCapability{MimeType: "audio/opus"}, "audio", "pion-audio")
-// 	if err != nil {
-// 		log.Fatalf("NewTrackLocalStaticRTP(audio): %v", err)
-// 	}
+	// create local RTP tracks
+	videoTrack, err = webrtc.NewTrackLocalStaticRTP(webrtc.RTPCodecCapability{MimeType: "video/H264"}, "video", "pion-video")
+	if err != nil {
+		log.Fatalf("NewTrackLocalStaticRTP(video): %v", err)
+	}
+	audioTrack, err = webrtc.NewTrackLocalStaticRTP(webrtc.RTPCodecCapability{MimeType: "audio/opus"}, "audio", "pion-audio")
+	if err != nil {
+		log.Fatalf("NewTrackLocalStaticRTP(audio): %v", err)
+	}
 
-// 	// pump RTP
-// 	go pumpRTP("[::]:5004", videoTrack, 109)
-// 	go pumpRTP("[::]:5006", audioTrack, 111)
+	// pump RTP
+	go pumpRTP("[::]:5004", videoTrack, 109)
+	go pumpRTP("[::]:5006", audioTrack, 111)
 
-// 	// handle graceful shutdown
-// 	sigCh := make(chan os.Signal, 1)
-// 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
+	// handle graceful shutdown
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
 
-// 	// connect and maintain signalling
-// 	go func() {
-// 		for {
-// 			if err := connectAndSignal(api, myID, *room, *server); err != nil {
-// 				log.Printf("Signal loop exited with: %v; retrying in 1s...", err)
-// 			}
-// 			time.Sleep(time.Second)
-// 		}
-// 	}()
+	// connect and maintain signalling
+	go func() {
+		for {
+			if err := connectAndSignal(api, myID, *room, *server); err != nil {
+				log.Printf("Signal loop exited with: %v; retrying in 1s...", err)
+			}
+			time.Sleep(time.Second)
+		}
+	}()
 
-// 	// start FFmpeg push
-// 	go runFFmpegCLI(
-// 		"/dev/video0", "v4l2", 30, "640x480",
-// 		"rtp://127.0.0.1:5004",
-// 		map[string]string{"c:v": "libx264", "preset": "ultrafast", "tune": "zerolatency", "pix_fmt": "yuv420p", "an": "", "f": "rtp", "payload_type": "109"},
-// 	)
+	// start FFmpeg push
+	go runFFmpegCLI(
+		"/dev/video0", "v4l2", 30, "640x480",
+		"rtp://127.0.0.1:5004",
+		map[string]string{"c:v": "libx264", "preset": "ultrafast", "tune": "zerolatency", "pix_fmt": "yuv420p", "an": "", "f": "rtp", "payload_type": "109"},
+	)
 
-// 	<-sigCh
-// 	log.Println("Shutting down: sending leave & closing peers...")
-// 	peersMu.Lock()
-// 	for _, pc := range peers {
-// 		pc.Close()
-// 	}
-// 	peersMu.Unlock()
-// }
+	<-sigCh
+	log.Println("Shutting down: sending leave & closing peers...")
+	peersMu.Lock()
+	for _, pc := range peers {
+		pc.Close()
+	}
+	peersMu.Unlock()
+}
 
 func runFFmpegCLI(input, format string, fps int, size, output string, outArgs map[string]string) {
 	// start with global flags
@@ -288,6 +291,25 @@ func handleSignal(
 			dc.OnMessage(func(msg webrtc.DataChannelMessage) {
 				// handle incoming keyboard messages
 				log.Printf("← keyboard msg: %s", string(msg.Data))
+				switch string(msg.Data) {
+				case "forward":
+					log.Println("Forward command received")
+					LeftForward()
+					RightForward()
+				case "backward":
+					log.Println("Backward command received")
+					LeftReverse()
+					RightReverse()
+				case "left":
+					log.Println("Left command received")
+					LeftForward()
+				case "right":
+					log.Println("Right command received")
+					RightForward()
+				case "stop":
+					log.Println("Stop command received")
+					Stop()
+				}
 			})
 		}
 	case "offer":
