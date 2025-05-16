@@ -308,6 +308,8 @@ func handleSignal(
 				m2 := motors[1]
 				m3 := motors[2]
 				m4 := motors[3]
+
+				log.Printf("Received message on DataChannel 'keyboard': %s", string(msg.Data))
 				
 				type Msg struct {
 					key string
