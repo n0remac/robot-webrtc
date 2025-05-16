@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"flag"
 	"fmt"
 	"io/ioutil"
 	"log"
@@ -9,13 +10,20 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"os/signal"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/gorilla/websocket"
 	"github.com/pion/rtp"
 	"github.com/pion/webrtc/v4"
+	"github.com/stianeikeland/go-rpio/v4"
+	"periph.io/x/conn/v3/i2c/i2creg"
+	"periph.io/x/conn/v3/physic"
+	"periph.io/x/devices/v3/pca9685"
+	"periph.io/x/host/v3"
 )
 
 // TURN credentials struct
@@ -38,104 +46,131 @@ var (
 	audioTrack       *webrtc.TrackLocalStaticRTP
 )
 
-// func main() {
-// 	if err := rpio.Open(); err != nil {
-// 		fmt.Println("Unable to open GPIO:", err)
-// 		return
-// 	}
-// 	defer rpio.Close()
+func main() {
+	// 1) Initialize host drivers
+	if _, err := host.Init(); err != nil {
+		log.Fatal("host.Init:", err)
+	}
 
-// 	m1 := NewMotor("MOTOR1", 1)
-// 	m2 := NewMotor("MOTOR2", 1)
-// 	m3 := NewMotor("MOTOR3", 1)
-// 	m4 := NewMotor("MOTOR4", 1)
+	// 2) Open the I²C bus
+	bus, err := i2creg.Open("")
+	if err != nil {
+		log.Fatal("i2creg.Open:", err)
+	}
+	defer bus.Close()
 
-// 	motors := []*Motor{m1, m2, m3, m4}
+	// 3) Create PCA9685 and set it up for 50 Hz
+	pca, err := pca9685.NewI2C(bus, pca9685.I2CAddr)
+	if err != nil {
+		log.Fatal("pca9685.NewI2C:", err)
+	}
+	if err := pca.SetPwmFreq(50 * physic.Hertz); err != nil {
+		log.Fatal("SetPwmFreq:", err)
+	}
+	if err := pca.SetAllPwm(0, 0); err != nil {
+		log.Fatal("SetAllPwm:", err)
+	}
 
-// 	// CLI flags
-// 	server := flag.String("server", "wss://noremac.dev/ws/hub", "signaling server URL")
-// 	// server := flag.String("server", "ws://localhost:8080/ws/hub", "signaling server URL")
-// 	room := flag.String("room", "default", "room name")
-// 	id := flag.String("id", "", "unique client ID")
-// 	flag.Parse()
+	// 4) Build a ServoGroup (0°–180° from tick 50→650)
+	servos := pca9685.NewServoGroup(pca, 50, 650, 0, 180)
 
-// 	// generate ID if none provided
-// 	if *id == "" {
-// 		*id = fmt.Sprintf("%d", time.Now().UnixNano())
-// 	}
-// 	myID := *id
-// 	log.Printf("My ID: %s", myID)
+	if err := rpio.Open(); err != nil {
+		fmt.Println("Unable to open GPIO:", err)
+		return
+	}
+	defer rpio.Close()
 
-// 	// fetch TURN credentials and build ICE servers
-// 	serverBase := strings.TrimSuffix(strings.TrimPrefix(*server, "wss://"), "/ws/hub")
-// 	creds, err := fetchTurnCredentials("https://" + serverBase + "/turn-credentials")
-// 	if err != nil {
-// 		log.Printf("Warning: could not fetch TURN creds: %v", err)
-// 	}
-// 	globalIceServers = []webrtc.ICEServer{{URLs: []string{"stun:stun.l.google.com:19302"}}}
-// 	if creds != nil {
-// 		for _, uri := range creds.URLs {
-// 			globalIceServers = append(globalIceServers,
-// 				webrtc.ICEServer{URLs: []string{uri}, Username: creds.Username, Credential: creds.Credential},
-// 			)
-// 		}
-// 	}
+	m1 := NewMotor("MOTOR1", 1)
+	m2 := NewMotor("MOTOR2", 1)
+	m3 := NewMotor("MOTOR3", 1)
+	m4 := NewMotor("MOTOR4", 1)
 
-// 	// prepare static-RTP tracks
-// 	m := webrtc.MediaEngine{}
-// 	m.RegisterCodec(webrtc.RTPCodecParameters{
-// 		RTPCodecCapability: webrtc.RTPCodecCapability{MimeType: webrtc.MimeTypeH264, ClockRate: 90000, SDPFmtpLine: "packetization-mode=1;profile-level-id=42e01f"},
-// 		PayloadType:        109,
-// 	}, webrtc.RTPCodecTypeVideo)
-// 	m.RegisterCodec(webrtc.RTPCodecParameters{
-// 		RTPCodecCapability: webrtc.RTPCodecCapability{MimeType: webrtc.MimeTypeOpus, ClockRate: 48000, Channels: 2},
-// 		PayloadType:        111,
-// 	}, webrtc.RTPCodecTypeAudio)
-// 	api := webrtc.NewAPI(webrtc.WithMediaEngine(&m))
+	motors := []*Motor{m1, m2, m3, m4}
 
-// 	// create local RTP tracks
-// 	videoTrack, err = webrtc.NewTrackLocalStaticRTP(webrtc.RTPCodecCapability{MimeType: "video/H264"}, "video", "pion-video")
-// 	if err != nil {
-// 		log.Fatalf("NewTrackLocalStaticRTP(video): %v", err)
-// 	}
-// 	audioTrack, err = webrtc.NewTrackLocalStaticRTP(webrtc.RTPCodecCapability{MimeType: "audio/opus"}, "audio", "pion-audio")
-// 	if err != nil {
-// 		log.Fatalf("NewTrackLocalStaticRTP(audio): %v", err)
-// 	}
+	// CLI flags
+	server := flag.String("server", "wss://noremac.dev/ws/hub", "signaling server URL")
+	// server := flag.String("server", "ws://localhost:8080/ws/hub", "signaling server URL")
+	room := flag.String("room", "default", "room name")
+	id := flag.String("id", "", "unique client ID")
+	flag.Parse()
 
-// 	// pump RTP
-// 	go pumpRTP("[::]:5004", videoTrack, 109)
-// 	go pumpRTP("[::]:5006", audioTrack, 111)
+	// generate ID if none provided
+	if *id == "" {
+		*id = fmt.Sprintf("%d", time.Now().UnixNano())
+	}
+	myID := *id
+	log.Printf("My ID: %s", myID)
 
-// 	// handle graceful shutdown
-// 	sigCh := make(chan os.Signal, 1)
-// 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
+	// fetch TURN credentials and build ICE servers
+	serverBase := strings.TrimSuffix(strings.TrimPrefix(*server, "wss://"), "/ws/hub")
+	creds, err := fetchTurnCredentials("https://" + serverBase + "/turn-credentials")
+	if err != nil {
+		log.Printf("Warning: could not fetch TURN creds: %v", err)
+	}
+	globalIceServers = []webrtc.ICEServer{{URLs: []string{"stun:stun.l.google.com:19302"}}}
+	if creds != nil {
+		for _, uri := range creds.URLs {
+			globalIceServers = append(globalIceServers,
+				webrtc.ICEServer{URLs: []string{uri}, Username: creds.Username, Credential: creds.Credential},
+			)
+		}
+	}
 
-// 	// connect and maintain signalling
-// 	go func() {
-// 		for {
-// 			if err := connectAndSignal(api, myID, *room, *server, motors); err != nil {
-// 				log.Printf("Signal loop exited with: %v; retrying in 1s...", err)
-// 			}
-// 			time.Sleep(time.Second)
-// 		}
-// 	}()
+	// prepare static-RTP tracks
+	m := webrtc.MediaEngine{}
+	m.RegisterCodec(webrtc.RTPCodecParameters{
+		RTPCodecCapability: webrtc.RTPCodecCapability{MimeType: webrtc.MimeTypeH264, ClockRate: 90000, SDPFmtpLine: "packetization-mode=1;profile-level-id=42e01f"},
+		PayloadType:        109,
+	}, webrtc.RTPCodecTypeVideo)
+	m.RegisterCodec(webrtc.RTPCodecParameters{
+		RTPCodecCapability: webrtc.RTPCodecCapability{MimeType: webrtc.MimeTypeOpus, ClockRate: 48000, Channels: 2},
+		PayloadType:        111,
+	}, webrtc.RTPCodecTypeAudio)
+	api := webrtc.NewAPI(webrtc.WithMediaEngine(&m))
 
-// 	// start FFmpeg push
-// 	go runFFmpegCLI(
-// 		"/dev/video0", "v4l2", 30, "640x480",
-// 		"rtp://127.0.0.1:5004",
-// 		map[string]string{"c:v": "libx264", "preset": "ultrafast", "tune": "zerolatency", "pix_fmt": "yuv420p", "an": "", "f": "rtp", "payload_type": "109"},
-// 	)
+	// create local RTP tracks
+	videoTrack, err = webrtc.NewTrackLocalStaticRTP(webrtc.RTPCodecCapability{MimeType: "video/H264"}, "video", "pion-video")
+	if err != nil {
+		log.Fatalf("NewTrackLocalStaticRTP(video): %v", err)
+	}
+	audioTrack, err = webrtc.NewTrackLocalStaticRTP(webrtc.RTPCodecCapability{MimeType: "audio/opus"}, "audio", "pion-audio")
+	if err != nil {
+		log.Fatalf("NewTrackLocalStaticRTP(audio): %v", err)
+	}
 
-// 	<-sigCh
-// 	log.Println("Shutting down: sending leave & closing peers...")
-// 	peersMu.Lock()
-// 	for _, pc := range peers {
-// 		pc.Close()
-// 	}
-// 	peersMu.Unlock()
-// }
+	// pump RTP
+	go pumpRTP("[::]:5004", videoTrack, 109)
+	go pumpRTP("[::]:5006", audioTrack, 111)
+
+	// handle graceful shutdown
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
+
+	// connect and maintain signalling
+	go func() {
+		for {
+			if err := connectAndSignal(api, myID, *room, *server, motors, servos); err != nil {
+				log.Printf("Signal loop exited with: %v; retrying in 1s...", err)
+			}
+			time.Sleep(time.Second)
+		}
+	}()
+
+	// start FFmpeg push
+	go runFFmpegCLI(
+		"/dev/video0", "v4l2", 30, "640x480",
+		"rtp://127.0.0.1:5004",
+		map[string]string{"c:v": "libx264", "preset": "ultrafast", "tune": "zerolatency", "pix_fmt": "yuv420p", "an": "", "f": "rtp", "payload_type": "109"},
+	)
+
+	<-sigCh
+	log.Println("Shutting down: sending leave & closing peers...")
+	peersMu.Lock()
+	for _, pc := range peers {
+		pc.Close()
+	}
+	peersMu.Unlock()
+}
 
 func runFFmpegCLI(input, format string, fps int, size, output string, outArgs map[string]string) {
 	// start with global flags
@@ -261,6 +296,7 @@ func handleSignal(
 	myID, room string,
 	msg map[string]interface{},
 	motors []*Motor,
+	servos *pca9685.ServoGroup,
 ) {
 	typ, _ := msg["type"].(string)
 	from, _ := msg["from"].(string)
@@ -320,7 +356,50 @@ func handleSignal(
 				log.Printf("Received action: %s", message.Action)
 				log.Printf("Received key: %s", message.Key)
 
+				const speed = 60.0 // degrees per second
+
+				// helper to kick off or stop a move
+				act := func(pin, dir int) {
+					if message.Action == "pressed" {
+						if err := Move(servos, pin, dir, speed); err != nil {
+							log.Printf("Move error pin %d: %v", pin, err)
+						}
+					} else {
+						Stop(pin)
+					}
+				}
+
 				switch string(message.Key) {
+				// Claw (pin 4): r=open, f=close
+				case "r":
+					act(4, +1)
+				case "f":
+					act(4, -1)
+
+				// Up/Down (pin 6): t=up, g=down
+				case "t":
+					act(6, +1)
+				case "g":
+					act(6, -1)
+
+				// Left/Right (pin 5): y=right, d=left
+				case "y":
+					act(5, +1)
+				case "h":
+					act(5, -1)
+
+				// Camera tilt (pin 14): i=up, k=down
+				case "i":
+					act(14, +1)
+				case "k":
+					act(14, -1)
+
+				// Camera pan (pin 15): l=right, j=left
+				case "l":
+					act(15, +1)
+				case "j":
+					act(15, -1)
+
 				case "1":
 					if message.Action == "pressed" {
 						log.Println("1 key pressed")
@@ -647,7 +726,7 @@ func restartICE(pc *webrtc.PeerConnection, ws *websocket.Conn, myID, peerID, roo
 }
 
 // connectAndSignal manages WebSocket signalling (with auto-reconnect)
-func connectAndSignal(api *webrtc.API, myID, room, wsURL string, motors []*Motor) error {
+func connectAndSignal(api *webrtc.API, myID, room, wsURL string, motors []*Motor, servos *pca9685.ServoGroup) error {
 	// dial
 	ws, _, err := websocket.DefaultDialer.Dial(fmt.Sprintf("%s?room=%s", wsURL, room), nil)
 	if err != nil {
@@ -664,7 +743,7 @@ func connectAndSignal(api *webrtc.API, myID, room, wsURL string, motors []*Motor
 		if err := ws.ReadJSON(&msg); err != nil {
 			return err
 		}
-		handleSignal(ws, api, myID, room, msg, motors)
+		handleSignal(ws, api, myID, room, msg, motors, servos)
 	}
 }
 

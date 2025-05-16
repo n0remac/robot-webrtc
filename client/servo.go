@@ -17,57 +17,55 @@ var (
 	currentAngles = make(map[int]float64)
 )
 
-func main() {
-	Stop(4)
-	Stop(6)
-	// // 1) Initialize host drivers
-	// if _, err := host.Init(); err != nil {
-	// 	log.Fatal("host.Init:", err)
-	// }
+// func main() {
+// 	// 1) Initialize host drivers
+// 	if _, err := host.Init(); err != nil {
+// 		log.Fatal("host.Init:", err)
+// 	}
 
-	// // 2) Open the I²C bus
-	// bus, err := i2creg.Open("")
-	// if err != nil {
-	// 	log.Fatal("i2creg.Open:", err)
-	// }
-	// defer bus.Close()
+// 	// 2) Open the I²C bus
+// 	bus, err := i2creg.Open("")
+// 	if err != nil {
+// 		log.Fatal("i2creg.Open:", err)
+// 	}
+// 	defer bus.Close()
 
-	// // 3) Create PCA9685 and set it up for 50 Hz
-	// pca, err := pca9685.NewI2C(bus, pca9685.I2CAddr)
-	// if err != nil {
-	// 	log.Fatal("pca9685.NewI2C:", err)
-	// }
-	// if err := pca.SetPwmFreq(50 * physic.Hertz); err != nil {
-	// 	log.Fatal("SetPwmFreq:", err)
-	// }
-	// if err := pca.SetAllPwm(0, 0); err != nil {
-	// 	log.Fatal("SetAllPwm:", err)
-	// }
+// 	// 3) Create PCA9685 and set it up for 50 Hz
+// 	pca, err := pca9685.NewI2C(bus, pca9685.I2CAddr)
+// 	if err != nil {
+// 		log.Fatal("pca9685.NewI2C:", err)
+// 	}
+// 	if err := pca.SetPwmFreq(50 * physic.Hertz); err != nil {
+// 		log.Fatal("SetPwmFreq:", err)
+// 	}
+// 	if err := pca.SetAllPwm(0, 0); err != nil {
+// 		log.Fatal("SetAllPwm:", err)
+// 	}
 
-	// // 4) Build a ServoGroup (0°–180° from tick 50→650)
-	// servos := pca9685.NewServoGroup(pca, 50, 650, 0, 180)
+// 	// 4) Build a ServoGroup (0°–180° from tick 50→650)
+// 	servos := pca9685.NewServoGroup(pca, 50, 650, 0, 180)
 
-	// // 5) Demo: move pin 4 forward at 60°/s
-	// pin := 4
-	// log.Println("▶ Moving servo pin forward at 60°/s")
-	// if err := Move(servos, pin, +1, 60); err != nil {
-	// 	log.Fatal(err)
-	// }
-	// time.Sleep(2 * time.Second)
-	// Stop(pin)
-	// log.Println("⏹ Stopped servo pin")
+// 	// 5) Demo: move pin 4 forward at 60°/s
+// 	pin := 4
+// 	log.Println("▶ Moving servo pin forward at 60°/s")
+// 	if err := Move(servos, pin, +1, 60); err != nil {
+// 		log.Fatal(err)
+// 	}
+// 	time.Sleep(2 * time.Second)
+// 	Stop(pin)
+// 	log.Println("⏹ Stopped servo pin")
 
-	// // 6) Demo: move pin 6 backward at 30°/s
-	// log.Println("▶ Moving servo 6 backward at 30°/s")
-	// if err := Move(servos, 6, -1, 30); err != nil {
-	// 	log.Fatal(err)
-	// }
-	// time.Sleep(3 * time.Second)
-	// Stop(6)
-	// log.Println("⏹ Stopped servo 6")
+// 	// 6) Demo: move pin 6 backward at 30°/s
+// 	log.Println("▶ Moving servo 6 backward at 30°/s")
+// 	if err := Move(servos, 6, -1, 30); err != nil {
+// 		log.Fatal(err)
+// 	}
+// 	time.Sleep(3 * time.Second)
+// 	Stop(6)
+// 	log.Println("⏹ Stopped servo 6")
 
-	// log.Println("✅ Demo complete")
-}
+// 	log.Println("✅ Demo complete")
+// }
 
 // Move starts a background loop that every 50ms steps the given servo
 // (channel) forward (direction=+1) or backward (direction=-1) at
