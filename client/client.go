@@ -308,9 +308,7 @@ func handleSignal(
 				m2 := motors[1]
 				m3 := motors[2]
 				m4 := motors[3]
-				// handle incoming keyboard messages
-				log.Printf("← keyboard msg: %s", string(msg.Data))
-
+				
 				type Msg struct {
 					key string
 					action string
@@ -320,6 +318,9 @@ func handleSignal(
 					log.Printf("Error unmarshalling message: %v", err)
 					return
 				}
+
+				log.Printf("Received action: %s", message.action)
+				log.Printf("Received key: %s", message.key)
 
 				switch string(message.key) {
 				case "w":
