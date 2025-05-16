@@ -383,9 +383,9 @@ func main() {
 	m4 := NewMotor("MOTOR4", 1)
 
 	m1.Reverse(100)
-	m2.Reverse(75)
+	m2.Forward(100)
 	m3.Forward(100)
-	m4.Forward(75)
+	m4.Reverse(100)
 	time.Sleep(3 * time.Second)
 	m1.Stop()
 	m2.Stop()
