@@ -387,5 +387,9 @@ func main() {
     m3.Forward(75)
     m4.Reverse(75)
 	time.Sleep(3 * time.Second)
+    m1.Stop()
+    m2.Stop()
+    m3.Stop()
+    m4.Stop()
     
 }
