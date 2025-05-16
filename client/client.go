@@ -57,8 +57,8 @@ func main() {
 	motors := []*Motor{m1, m2, m3, m4}
 
 	// CLI flags
-	// server := flag.String("server", "wss://noremac.dev/ws/hub", "signaling server URL")
-	server := flag.String("server", "ws://localhost:8080/ws/hub", "signaling server URL")
+	server := flag.String("server", "wss://noremac.dev/ws/hub", "signaling server URL")
+	// server := flag.String("server", "ws://localhost:8080/ws/hub", "signaling server URL")
 	room := flag.String("room", "default", "room name")
 	id := flag.String("id", "", "unique client ID")
 	flag.Parse()
@@ -317,7 +317,7 @@ func handleSignal(
 					m3.Reverse(100)
 					m2.Forward(100)
 					m4.Forward(100)
-					
+
 				case "backward":
 					log.Println("Backward command received")
 		
