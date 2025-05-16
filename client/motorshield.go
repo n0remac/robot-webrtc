@@ -394,38 +394,3 @@ func (s *Sensor) Trigger() {
 
 // }
 
-
-var (
-    // Motors
-    m1 = NewMotor("MOTOR1", 1)
-    m2 = NewMotor("MOTOR2", 1)
-    m3 = NewMotor("MOTOR3", 1)
-    m4 = NewMotor("MOTOR4", 1)
-)
-
-func LeftForward() {
-    m1.Forward(100)
-    m3.Reverse(100)
-}
-
-func LeftReverse() {
-    m1.Reverse(100)
-    m3.Forward(100)
-}
-
-func RightForward() {
-    m2.Forward(100)
-    m4.Forward(100)
-}
-
-func RightReverse() {
-    m2.Reverse(100)
-    m4.Reverse(100)
-}
-
-func Stop() {
-    m1.Stop()
-    m2.Stop()
-    m3.Stop()
-    m4.Stop()
-}

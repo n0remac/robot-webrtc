@@ -49,6 +49,13 @@ func main() {
 	}
 	defer rpio.Close()
 
+	m1 := NewMotor("MOTOR1", 1)
+	m2 := NewMotor("MOTOR2", 1)
+	m3 := NewMotor("MOTOR3", 1)
+	m4 := NewMotor("MOTOR4", 1)
+
+	motors := []*Motor{m1, m2, m3, m4}
+
 	// CLI flags
 	// server := flag.String("server", "wss://noremac.dev/ws/hub", "signaling server URL")
 	server := flag.String("server", "ws://localhost:8080/ws/hub", "signaling server URL")
@@ -111,7 +118,7 @@ func main() {
 	// connect and maintain signalling
 	go func() {
 		for {
-			if err := connectAndSignal(api, myID, *room, *server); err != nil {
+			if err := connectAndSignal(api, myID, *room, *server, motors); err != nil {
 				log.Printf("Signal loop exited with: %v; retrying in 1s...", err)
 			}
 			time.Sleep(time.Second)
@@ -257,6 +264,7 @@ func handleSignal(
 	api *webrtc.API,
 	myID, room string,
 	msg map[string]interface{},
+	motors []*Motor,
 ) {
 	typ, _ := msg["type"].(string)
 	from, _ := msg["from"].(string)
@@ -296,26 +304,32 @@ func handleSignal(
 				log.Printf("✔︎ Go DataChannel 'keyboard' open")
 			})
 			dc.OnMessage(func(msg webrtc.DataChannelMessage) {
+				m1 := motors[0]
+				m2 := motors[1]
+				m3 := motors[2]
+				m4 := motors[3]
 				// handle incoming keyboard messages
 				log.Printf("← keyboard msg: %s", string(msg.Data))
 				switch string(msg.Data) {
 				case "forward":
 					log.Println("Forward command received")
-					LeftForward()
-					RightForward()
+					m1.Forward(100)
+					m3.Reverse(100)
+					m2.Forward(100)
+					m4.Forward(100)
+					
 				case "backward":
 					log.Println("Backward command received")
-					LeftReverse()
-					RightReverse()
+		
 				case "left":
 					log.Println("Left command received")
-					LeftForward()
+					
 				case "right":
 					log.Println("Right command received")
-					RightForward()
+		
 				case "stop":
 					log.Println("Stop command received")
-					Stop()
+		
 				}
 			})
 		}
@@ -557,7 +571,7 @@ func restartICE(pc *webrtc.PeerConnection, ws *websocket.Conn, myID, peerID, roo
 }
 
 // connectAndSignal manages WebSocket signalling (with auto-reconnect)
-func connectAndSignal(api *webrtc.API, myID, room, wsURL string) error {
+func connectAndSignal(api *webrtc.API, myID, room, wsURL string, motors []*Motor) error {
 	// dial
 	ws, _, err := websocket.DefaultDialer.Dial(fmt.Sprintf("%s?room=%s", wsURL, room), nil)
 	if err != nil {
@@ -574,7 +588,7 @@ func connectAndSignal(api *webrtc.API, myID, room, wsURL string) error {
 		if err := ws.ReadJSON(&msg); err != nil {
 			return err
 		}
-		handleSignal(ws, api, myID, room, msg)
+		handleSignal(ws, api, myID, room, msg, motors)
 	}
 }
 
