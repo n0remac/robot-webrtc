@@ -393,6 +393,8 @@ func (s *Sensor) Trigger() {
 // 	m4.Stop()
 
 // }
+
+
 var (
     // Motors
     m1 = NewMotor("MOTOR1", 1)

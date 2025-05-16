@@ -19,6 +19,7 @@ import (
 	"github.com/gorilla/websocket"
 	"github.com/pion/rtp"
 	"github.com/pion/webrtc/v4"
+	"github.com/stianeikeland/go-rpio/v4"
 )
 
 // TURN credentials struct
@@ -42,6 +43,12 @@ var (
 )
 
 func main() {
+	if err := rpio.Open(); err != nil {
+		fmt.Println("Unable to open GPIO:", err)
+		return
+	}
+	defer rpio.Close()
+
 	// CLI flags
 	// server := flag.String("server", "wss://noremac.dev/ws/hub", "signaling server URL")
 	server := flag.String("server", "ws://localhost:8080/ws/hub", "signaling server URL")
