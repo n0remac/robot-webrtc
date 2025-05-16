@@ -330,8 +330,8 @@ func handleSignal(
 						log.Println("w key pressed")
 						m1.Forward(100)
 						m3.Reverse(100)
-						m2.Forward(100)
-						m4.Forward(100)
+						m2.Reverse(100)
+						m4.Reverse(100)
 					} else if message.Action == "released" {
 						log.Println("w key released")
 						m1.Stop()
