@@ -360,7 +360,7 @@ func handleSignal(
 				log.Printf("Received action: %s", message.Action)
 				log.Printf("Received key: %s", message.Key)
 
-				const speed = 60.0 // degrees per second
+				const speed = 60 // degrees per second
 
 				// helper to kick off or stop a move
 				act := func(pin, dir int) {
