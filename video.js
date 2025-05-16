@@ -161,21 +161,39 @@ function setupIceServers(turnData) {
 }
 
 async function setupLocalMedia() {
-  if (previewStream && micStream) {
-    // merge the two into one MediaStream
-    const tracks = [...previewStream.getVideoTracks(), ...micStream.getAudioTracks()];
-    localStream = new MediaStream(tracks);
-    Logger.info('gUM success (preview + mic)');
-  } else {
-    try {
-      localStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
-      Logger.info('gUM success');
-    } catch (err) {
-      Logger.error('getUserMedia failed', { message: err.message, name: err.name });
-      throw err;
-    }
+  let videoStream = null;
+  let audioStream = null;
+
+  // try video
+  try {
+    videoStream = await navigator.mediaDevices.getUserMedia({ video: true });
+    Logger.info('video gUM success');
+  } catch (err) {
+    Logger.warn('video unavailable, continuing without camera', err);
+  }
+
+  // try audio
+  try {
+    audioStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    Logger.info('audio gUM success');
+  } catch (err) {
+    Logger.warn('audio unavailable, continuing without mic', err);
+  }
+
+  // merge whatever tracks we got (could be zero!)
+  const tracks = [
+    ...(videoStream ? videoStream.getVideoTracks() : []),
+    ...(audioStream ? audioStream.getAudioTracks() : [])
+  ];
+  localStream = new MediaStream(tracks);
+
+  // (optional) notify user in UI
+  if (tracks.length === 0) {
+    const warn = document.getElementById('no-media-warning');
+    if (warn) warn.textContent = '⚠️ No camera or mic available; joining with media disabled.';
   }
 }
+
 
 function showLocalVideo() {
     const video = Object.assign(document.createElement('video'), {

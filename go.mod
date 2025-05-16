@@ -8,7 +8,7 @@ require (
 	github.com/pion/rtp v1.8.13
 	github.com/pion/webrtc/v4 v4.0.15
 	github.com/sashabaranov/go-openai v1.38.1
-	gocv.io/x/gocv v0.41.0
+	github.com/stianeikeland/go-rpio/v4 v4.6.0
 )
 
 require (
