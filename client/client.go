@@ -310,14 +310,32 @@ func handleSignal(
 				m4 := motors[3]
 				// handle incoming keyboard messages
 				log.Printf("← keyboard msg: %s", string(msg.Data))
-				switch string(msg.Data) {
-				case "forward":
-					log.Println("Forward command received")
-					m1.Forward(100)
-					m3.Reverse(100)
-					m2.Forward(100)
-					m4.Forward(100)
 
+				type Msg struct {
+					key string
+					action string
+				}
+				var message Msg
+				if err := json.Unmarshal(msg.Data, &message); err != nil {
+					log.Printf("Error unmarshalling message: %v", err)
+					return
+				}
+
+				switch string(message.key) {
+				case "w":
+					if message.action == "pressed" {
+						log.Println("w key pressed")
+						m1.Forward(100)
+						m3.Reverse(100)
+						m2.Forward(100)
+						m4.Forward(100)
+					} else if message.action == "released" {
+						log.Println("w key released")
+						m1.Stop()
+						m3.Stop()
+						m2.Stop()
+						m4.Stop()
+					}
 				case "backward":
 					log.Println("Backward command received")
 		
