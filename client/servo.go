@@ -15,6 +15,7 @@ var (
 	moverMu       sync.Mutex
 	moverChans    = make(map[int]chan struct{})
 	currentAngles = make(map[int]float64)
+	i2cMu         sync.Mutex
 )
 
 // func main() {
@@ -131,6 +132,8 @@ func Stop(pin int) {
 }
 
 func setServo(servos *pca9685.ServoGroup, pin int, angle float64) error {
+	i2cMu.Lock()
+	defer i2cMu.Unlock()
 	servo := servos.GetServo(pin)
 	return servo.SetAngle(physic.Angle(angle))
 }
