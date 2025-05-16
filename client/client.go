@@ -321,18 +321,18 @@ func handleSignal(
 					return
 				}
 
-				log.Printf("Received action: %s", message.action)
-				log.Printf("Received key: %s", message.key)
+				log.Printf("Received action: %s", message.Action)
+				log.Printf("Received key: %s", message.Key)
 
-				switch string(message.key) {
+				switch string(message.Key) {
 				case "w":
-					if message.action == "pressed" {
+					if message.Action == "pressed" {
 						log.Println("w key pressed")
 						m1.Forward(100)
 						m3.Reverse(100)
 						m2.Forward(100)
 						m4.Forward(100)
-					} else if message.action == "released" {
+					} else if message.Action == "released" {
 						log.Println("w key released")
 						m1.Stop()
 						m3.Stop()
