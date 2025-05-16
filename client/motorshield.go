@@ -379,17 +379,17 @@ func main() {
 
 	m1 := NewMotor("MOTOR1", 1)
 	m2 := NewMotor("MOTOR2", 1)
-    m3 := NewMotor("MOTOR3", 1)
-    m4 := NewMotor("MOTOR4", 1)
+	m3 := NewMotor("MOTOR3", 1)
+	m4 := NewMotor("MOTOR4", 1)
 
-	m1.Forward(75)
-    // m2.Reverse(75)
-    // m3.Forward(75)
-    // m4.Reverse(75)
+	m1.Forward(100)
+	// m2.Reverse(75)
+	m3.Reverse(100)
+	// m4.Reverse(75)
 	time.Sleep(3 * time.Second)
-    m1.Stop()
-    m2.Stop()
-    m3.Stop()
-    m4.Stop()
-    
+	m1.Stop()
+	m2.Stop()
+	m3.Stop()
+	m4.Stop()
+
 }
