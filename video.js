@@ -133,7 +133,12 @@ async function joinSession() {
     await connectWebSocket();
 
     // bind all five keys
-    ;['w','a','s','d', '1', '2', '3', '4'].forEach(k =>
+    ;[
+      'w','a','s','d', 
+      '1', '2', '3', '4',
+      't', 'f', 'g', 'h',
+      'i', 'j', 'k', 'l',
+    ].forEach(k =>
       createKeyPressEventListener(k, (action, e) => {
       })
     );

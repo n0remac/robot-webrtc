@@ -9,6 +9,9 @@ require (
 	github.com/pion/webrtc/v4 v4.0.15
 	github.com/sashabaranov/go-openai v1.38.1
 	github.com/stianeikeland/go-rpio/v4 v4.6.0
+	periph.io/x/conn/v3 v3.7.2
+	periph.io/x/devices/v3 v3.7.4
+	periph.io/x/host/v3 v3.8.3
 )
 
 require (
