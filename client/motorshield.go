@@ -107,8 +107,8 @@ var motorConfigs = map[string]map[int]motorConfig{
 		2: {ePin: 17, fPin: 27, rPin: 22, arrow: 4},
 	},
 	"MOTOR2": {
-		1: {ePin: 3, fPin: 23, rPin: 24, arrow: 3}, // BOARD 22→3,16→23,18→24
-		2: {ePin: 3, fPin: 24, rPin: 23, arrow: 3},
+		1: {ePin: 25, fPin: 23, rPin: 24, arrow: 25}, // BOARD 22→3,16→23,18→24
+		2: {ePin: 25, fPin: 24, rPin: 23, arrow: 25},
 	},
 	"MOTOR3": {
 		1: {ePin: 10, fPin: 9, rPin: 11, arrow: 2}, // BOARD 19→10,21→9,23→11
