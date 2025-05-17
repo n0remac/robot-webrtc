@@ -473,19 +473,31 @@ func handleSignal(
 						log.Println("a key pressed")
 						m1.Reverse(100)
 						m3.Forward(100)
+
+						m2.Forward(100)
+						m4.Reverse(100)
 					} else if message.Action == "released" {
 						log.Println("a key released")
 						m1.Stop()
 						m3.Stop()
+						m2.Stop()
+						m4.Stop()
 					}
 				case "d":
 					log.Println("d key pressed")
 					if message.Action == "pressed" {
 						log.Println("d key pressed")
+						m1.Forward(100)
+						m3.Reverse(100)
+
 						m2.Forward(100)
 						m4.Forward(100)
+
+
 					} else if message.Action == "released" {
 						log.Println("d key released")
+						m1.Stop()
+						m3.Stop()
 						m2.Stop()
 						m4.Stop()
 					}
