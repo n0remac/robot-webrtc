@@ -490,7 +490,7 @@ func handleSignal(
 						m1.Forward(100)
 						m3.Reverse(100)
 
-						m2.Forward(100)
+						m2.Reverse(100)
 						m4.Forward(100)
 
 
