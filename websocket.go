@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"fmt"
 	"log"
 	"net/http"
 	"sync"
@@ -22,11 +23,13 @@ type WebsocketClient struct {
 	send     chan []byte
 	registry *CommandRegistry
 	room     string
+	id       string
 }
 
 type WebsocketMessage struct {
 	Room    string          `json:"room"`
 	Content json.RawMessage `json:"content"`
+	Id      string          `json:"id"`
 }
 
 type Hub struct {
@@ -86,12 +89,28 @@ func (h *Hub) run() {
 		case msg := <-h.Broadcast:
 			h.mu.Lock()
 			if clients, ok := h.rooms[msg.Room]; ok {
-				for client := range clients {
-					select {
-					case client.send <- msg.Content:
-					default:
-						close(client.send)
-						delete(clients, client)
+				if msg.Id == "" {
+					for client := range clients {
+						select {
+						case client.send <- msg.Content:
+						default:
+							close(client.send)
+							delete(clients, client)
+						}
+					}
+				} else {
+					for client := range clients {
+						fmt.Println("Sending to client", client.id)
+						fmt.Println("Message ID", msg.Id)
+						if client.id == msg.Id {
+							select {
+							case client.send <- msg.Content:
+							default:
+								close(client.send)
+								delete(clients, client)
+							}
+							break
+						}
 					}
 				}
 			}

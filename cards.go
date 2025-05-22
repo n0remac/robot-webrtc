@@ -77,6 +77,8 @@ func lobbyWebsocket(registry *CommandRegistry) func(http.ResponseWriter, *http.R
 			log.Println("⚠️  Not enough cards to deal")
 			return
 		}
+		page := gameScreen(game)
+
 		for range dealNum {
 			for player := range players {
 				card := game.Deck[0]
@@ -85,26 +87,32 @@ func lobbyWebsocket(registry *CommandRegistry) func(http.ResponseWriter, *http.R
 			}
 		}
 
+		for _, player := range players {
+			hub.Broadcast <- WebsocketMessage{
+				Room:    room,
+				Content: []byte(page.Render()),
+				Id:      player.Id,
+			}
+		}
 		mu.Unlock()
-
-		page := gameScreen(game)
-
-		hub.Broadcast <- WebsocketMessage{Room: room, Content: []byte(page.Render())}
 	})
 
 	return func(w http.ResponseWriter, r *http.Request) {
+		fmt.Println("WebSocket connection established!!!!!!!!!!!!!!!!!!!!!!!!!!!!")
 		room := r.URL.Query().Get("room")
+		playerId := r.URL.Query().Get("playerId")
 		conn, err := upgrader.Upgrade(w, r, nil)
 		if err != nil {
 			return
 		}
 		defer conn.Close()
-
+		fmt.Println("playerId", playerId)
 		client := &WebsocketClient{
 			conn:     conn,
 			send:     make(chan []byte, 256),
 			registry: registry,
 			room:     room,
+			id:       playerId,
 		}
 		hub.register <- client
 		go client.writePump()
@@ -118,21 +126,43 @@ func renderLobbyPage(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Room not specified", http.StatusBadRequest)
 		return
 	}
+	playerId := r.URL.Query().Get("playerId")
+	if playerId == "" {
+		http.Error(w, "Player ID not specified", http.StatusBadRequest)
+		return
+	}
+	lobby := lobbies[room]
+	if lobby == nil {
+		http.Error(w, "Lobby not found", http.StatusNotFound)
+		return
+	}
+	var player Player
+	for _, p := range lobby.Players {
+		if p.Id == playerId {
+			player = p
+			break
+		}
+	}
 
-	page := makeLobby(room)
+	page := makeLobby(player)
 	w.Header().Set("Content-Type", "text/html")
 	w.Write([]byte(page.Render()))
 }
 
-func makeLobby(room string) *Node {
+func makeLobby(player Player) *Node {
+	room := player.Room
 	l := lobbies[room]
+	id := player.Id
 
 	return Div(
 		Id("lobby"),
-		Attr("hx-get", "/game/lobby?room="+room),
+		Attr("hx-get", "/game/lobby?room="+room+"&playerId="+id),
 		Attr("hx-trigger", "every 2s"),
 		Attr("hx-target", "#lobby"),
 		Attr("hx-swap", "innerHTML"),
+		Script(Raw(fmt.Sprintf(`
+			localStorage.setItem("playerId", "%s");
+		`, id))),
 		Class("flex flex-col items-center justify-center h-screen bg-gray-800 text-white space-y-4"),
 		Div(Class("text-2xl"), T("Lobby")),
 		Div(Class("text-lg"), T("Players:")),
@@ -178,6 +208,7 @@ func makeLobby(room string) *Node {
 
 func joinLobby(w http.ResponseWriter, r *http.Request) {
 	room := r.URL.Query().Get("room")
+	playerId := r.URL.Query().Get("playerId")
 
 	name := r.FormValue("name")
 	if name == "" {
@@ -186,13 +217,13 @@ func joinLobby(w http.ResponseWriter, r *http.Request) {
 
 	player := Player{
 		Name: name,
-		Id:   uuid.NewString(),
+		Id:   playerId,
 		Room: room,
 		Hand: []Card{},
 	}
 
 	mu.Lock()
-	defer mu.Unlock()
+
 	var l Lobby
 
 	if lobby, ok := lobbies[room]; ok {
@@ -207,19 +238,23 @@ func joinLobby(w http.ResponseWriter, r *http.Request) {
 
 	l.Players = append(l.Players, player)
 	lobbies[room] = &l
-	mu.Unlock()
 
-	page := makeLobby(room)
+	page := makeLobby(player)
+	mu.Unlock()
 	w.Header().Set("Content-Type", "text/html")
 	w.Write([]byte(page.Render()))
 }
 
 func renderGamePage(w http.ResponseWriter, r *http.Request) {
 	room := r.URL.Query().Get("room")
+	if room == "" {
+		room = "default"
+	}
+	playerId := uuid.NewString()
 	page := DefaultLayout(
 		Attr("hx-ext", "ws"),
-		Attr("ws-connect", "/ws/hub?room="+room),
-		joinScreen(room),
+		Attr("ws-connect", fmt.Sprintf("/ws/lobby?room=%s&playerId=%s", room, playerId)),
+		joinScreen(room, playerId),
 	)
 	w.Header().Set("Content-Type", "text/html")
 	w.Write([]byte(page.Render()))
@@ -281,13 +316,14 @@ func gameScreen(game *Game) *Node {
 	)
 }
 
-func joinScreen(room string) *Node {
+func joinScreen(room string, playerId string) *Node {
+
 	joinUI := Div(
 		Id("lobby"),
 		Class("flex flex-col items-center justify-center h-screen bg-gray-800 text-white space-y-4"),
 		Div(Class("text-2xl"), T("Join Trick Evolution")),
 		Form(
-			Attr("hx-post", "/game/join?room="+room),
+			Attr("hx-post", fmt.Sprintf("/game/join?room=%s&playerId=%s", room, playerId)),
 			Attr("hx-target", "#lobby"),
 			Attr("hx-swap", "innerHTML"),
 			Input(
