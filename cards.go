@@ -3,10 +3,8 @@ package main
 import (
 	"fmt"
 	"log"
-	"math/rand"
 	"net/http"
 	"sync"
-	"time"
 
 	"github.com/google/uuid"
 )
@@ -19,19 +17,11 @@ var lobbies = make(map[string]*Lobby)
 var mu sync.Mutex
 
 type Player struct {
-	Name string
-	Id   string
-	Room string
-	Hand []Card
-}
-
-type Game struct {
-	mu          sync.Mutex
-	Deck        []Card
-	Discard     []Card
-	Players     []Player
-	CurrentTurn int
-	Started     bool
+	Name      string
+	Id        string
+	Room      string
+	Hand      []Card
+	TricksWon int
 }
 
 var games = make(map[string]*Game)
@@ -52,7 +42,6 @@ func GameUI(mux *http.ServeMux, registry *CommandRegistry) {
 func lobbyWebsocket(registry *CommandRegistry) func(http.ResponseWriter, *http.Request) {
 	registry.RegisterWebsocket("startCardGame", func(_ string, hub *Hub, data map[string]interface{}) {
 		room := data["room"].(string)
-		fmt.Println("Starting game in room:", room)
 
 		lobby := lobbies[room]
 		if lobby == nil {
@@ -65,8 +54,9 @@ func lobbyWebsocket(registry *CommandRegistry) func(http.ResponseWriter, *http.R
 		game, exists := games[room]
 		if !exists {
 			game = &Game{
-				Deck:    getStandardDeck(),
-				Players: players,
+				Deck:        getStandardDeck(),
+				Players:     players,
+				RankCompare: DefaultRankComparer,
 			}
 			games[room] = game
 		}
@@ -77,7 +67,6 @@ func lobbyWebsocket(registry *CommandRegistry) func(http.ResponseWriter, *http.R
 			log.Println("⚠️  Not enough cards to deal")
 			return
 		}
-		page := gameScreen(game)
 
 		for range dealNum {
 			for player := range players {
@@ -88,6 +77,8 @@ func lobbyWebsocket(registry *CommandRegistry) func(http.ResponseWriter, *http.R
 		}
 
 		for _, player := range players {
+			page := gameScreen(game, player.Id)
+
 			hub.Broadcast <- WebsocketMessage{
 				Room:    room,
 				Content: []byte(page.Render()),
@@ -97,8 +88,145 @@ func lobbyWebsocket(registry *CommandRegistry) func(http.ResponseWriter, *http.R
 		mu.Unlock()
 	})
 
+	registry.RegisterWebsocket("playCardToTrick", func(_ string, hub *Hub, data map[string]interface{}) {
+		room := data["room"].(string)
+		cardId := data["card"].(string)
+		playerId := data["playerId"].(string)
+
+		mu.Lock()
+		defer mu.Unlock()
+
+		game, exists := games[room]
+		if !exists {
+			log.Printf("⚠️  Game not found for room: %s", room)
+			return
+		}
+
+		var playedCard *Card
+		for pi, player := range game.Players {
+			if player.Id != playerId {
+				continue
+			}
+
+			// Remove the card from the player's hand
+			for ci, c := range player.Hand {
+				if c.ID == cardId {
+					playedCard = &c
+					game.Players[pi].Hand = append(player.Hand[:ci], player.Hand[ci+1:]...)
+					break
+				}
+			}
+			break
+		}
+
+		if playedCard == nil {
+			log.Printf("⚠️  Card %s not found in player's hand", cardId)
+			return
+		}
+
+		// Add to the current trick
+		game.PlayedCards = append(game.PlayedCards, CardPlay{
+			PlayerID: playerId,
+			Card:     *playedCard,
+		})
+
+		// Check if the trick is complete
+		if len(game.PlayedCards) == len(game.Players) {
+			// Trick complete
+			engine := RulesList()
+			effects := engine.TriggerHook(HookOnEndTrick, game, nil)
+			for _, effect := range effects {
+				if effect.Type == "award_trick" {
+					winner := effect.Params["winner"].(string)
+					// Track winner (add to their score or trick count)
+					log.Printf("🏆 Player %s wins the trick", winner)
+					for pi, p := range game.Players {
+						if p.Id == winner {
+							game.Players[pi].TricksWon++
+							log.Printf("Player %s now has %d tricks won", p.Name, game.Players[pi].TricksWon)
+							break
+						}
+					}
+				}
+			}
+			// Clear the played cards for the next trick
+			game.PlayedCards = nil
+		}
+
+		// Update all players
+		for _, player := range game.Players {
+			if player.Id == playerId {
+				hub.Broadcast <- WebsocketMessage{
+					Room:    room,
+					Content: []byte(createPlayerHand(game, playerId).Render()),
+					Id:      player.Id,
+				}
+			}
+			hub.Broadcast <- WebsocketMessage{
+				Room:    room,
+				Content: []byte(createTrickArea(game, player.Id).Render()),
+				Id:      player.Id,
+			}
+		}
+	})
+
+	registry.RegisterWebsocket("discardCard", func(_ string, hub *Hub, data map[string]interface{}) {
+		room := data["room"].(string)
+		cardId := data["card"].(string)
+		playerId := data["playerId"].(string)
+
+		mu.Lock()
+		defer mu.Unlock()
+
+		game, exists := games[room]
+		if !exists {
+			log.Printf("⚠️  Game not found for room: %s", room)
+			return
+		}
+
+		var playedCard *Card
+		for pi, player := range game.Players {
+			if player.Id != playerId {
+				continue
+			}
+
+			// Remove the card from the player's hand
+			for ci, c := range player.Hand {
+				if c.ID == cardId {
+					playedCard = &c
+					// remove from hand
+					game.Players[pi].Hand = append(player.Hand[:ci], player.Hand[ci+1:]...)
+					break
+				}
+			}
+			break
+		}
+
+		if playedCard == nil {
+			log.Printf("⚠️  Card %s not found in player's hand", cardId)
+			return
+		}
+
+		// Add to discard pile
+		game.Discard = append(game.Discard, *playedCard)
+
+		for _, player := range game.Players {
+			hub.Broadcast <- WebsocketMessage{
+				Room:    room,
+				Content: []byte(createDiscardPile(game).Render()),
+				Id:      player.Id,
+			}
+			if player.Id == playerId {
+				hub.Broadcast <- WebsocketMessage{
+					Room:    room,
+					Content: []byte(createPlayerHand(game, playerId).Render()),
+					Id:      player.Id,
+				}
+			}
+		}
+	})
+
 	return func(w http.ResponseWriter, r *http.Request) {
-		fmt.Println("WebSocket connection established!!!!!!!!!!!!!!!!!!!!!!!!!!!!")
 		room := r.URL.Query().Get("room")
 		playerId := r.URL.Query().Get("playerId")
 		conn, err := upgrader.Upgrade(w, r, nil)
@@ -106,7 +234,6 @@ func lobbyWebsocket(registry *CommandRegistry) func(http.ResponseWriter, *http.R
 			return
 		}
 		defer conn.Close()
-		fmt.Println("playerId", playerId)
 		client := &WebsocketClient{
 			conn:     conn,
 			send:     make(chan []byte, 256),
@@ -252,67 +379,116 @@ func renderGamePage(w http.ResponseWriter, r *http.Request) {
 	}
 	playerId := uuid.NewString()
 	page := DefaultLayout(
+		Script(Raw(
+			`let wsWrapper = null;
+
+			document.addEventListener('htmx:wsOpen', function (evt) {
+				console.log("WebSocket opened:", evt.detail);
+				wsWrapper = evt.detail.socketWrapper;
+			});`,
+		)),
 		Attr("hx-ext", "ws"),
-		Attr("ws-connect", fmt.Sprintf("/ws/lobby?room=%s&playerId=%s", room, playerId)),
-		joinScreen(room, playerId),
-	)
+		Div(
+			Id("game-container"),
+			Attr("ws-connect", fmt.Sprintf("/ws/lobby?room=%s&playerId=%s", room, playerId)),
+			joinScreen(room, playerId),
+		))
 	w.Header().Set("Content-Type", "text/html")
 	w.Write([]byte(page.Render()))
 }
 
-func gameScreen(game *Game) *Node {
-	room := game.Players[0].Room
-	deck, hand := newGameState()
+func gameScreen(game *Game, playerId string) *Node {
+	deck := game.Deck
+
 	var deckTop Card
 	if len(deck) > 0 {
 		deckTop = deck[0]
 	}
 
 	return DefaultLayout(
-		Script(Raw(loadFile("cards.js"))),
 		Div(
+			Script(Raw(loadFile("cards.js"))),
 			Id("lobby"),
-			Script(Raw(fmt.Sprintf(`
-				document.addEventListener('DOMContentLoaded', function() {
-				var btn = document.getElementById('start-btn');
-				if (btn) {
-					btn.addEventListener('click', function() {
-					fetch('/game/mvp/start?room=%s', { method: 'POST' })
-						.then(function(resp) { if (!resp.ok) alert('Failed to start game'); });
-					});
-				}
-				});
-			`, room))),
 			Div(
-				Div(
-					Class("p-4 bg-gray-100 text-center"),
-					Button(Id("start-btn"), Class("btn btn-secondary"), T("Start Game")),
-				),
 				Div(Class("flex flex-col h-screen"),
 					Div(
 						Id("table-area"),
 						Class("relative flex-1 bg-green-800"),
 						Div(Id("deck-stack"), Class("absolute top-4 left-4"), standardCardFace(deckTop, true)),
 						Div(Id("discard-pile"), Class("absolute top-4 left-20")),
+						createTrickArea(game, playerId),
 					),
-					Div(
-						Id("player-hand"),
-						Class("flex overflow-x-auto bg-gray-900 p-2"),
-						Ch(func() []*Node {
-							var nodes []*Node
-							for _, c := range hand {
-								n := standardCardFace(c, false)
-								n.Attrs["draggable"] = "true"
-								n.Attrs["ondragstart"] = "onDragStart(event)"
-								n.Attrs["data-card-id"] = c.ID
-
-								nodes = append(nodes, n)
-							}
-							return nodes
-						}()),
-					)),
+					createPlayerHand(game, playerId),
+				),
 			),
 		),
+	)
+}
+
+func createTrickArea(game *Game, playerId string) *Node {
+	return Div(
+		Id("trick-area"),
+		Class("absolute top-60 left-0 right-0 h-44 flex items-center justify-center gap-4"),
+		Ch(func() []*Node {
+			var nodes []*Node
+			for _, play := range game.PlayedCards {
+				card := standardCardFace(play.Card, false)
+				card.Attrs["data-player-id"] = play.PlayerID
+				card.Attrs["data-card-id"] = play.Card.ID
+				nodes = append(nodes, card)
+			}
+			return nodes
+		}()),
+	)
+}
+
+func createPlayerHand(game *Game, playerId string) *Node {
+	hand := make([]Card, 0)
+	for _, player := range game.Players {
+		if player.Id == playerId {
+			hand = player.Hand
+			break
+		}
+	}
+
+	return Div(
+		Id("player-hand"),
+		Class("flex overflow-x-auto bg-gray-900 p-2"),
+		Ch(func() []*Node {
+			var nodes []*Node
+			for _, c := range hand {
+				n := standardCardFace(c, false)
+				n.Attrs["draggable"] = "true"
+				n.Attrs["ondragstart"] = "onDragStart(event)"
+				n.Attrs["data-card-id"] = c.ID
+				n.Attrs["data-room"] = game.Players[0].Room
+				n.Attrs["data-player-id"] = playerId
+
+				nodes = append(nodes, n)
+			}
+			return nodes
+		}()),
+	)
+}
+
+func createDiscardPile(game *Game) *Node {
+	cards := game.Discard
+
+	return Div(
+		Id("discard-pile"),
+		Class("absolute top-4 left-20 relative h-44 w-[300px]"),
+		Ch(func() []*Node {
+			var nodes []*Node
+			for i, c := range cards {
+				offset := fmt.Sprintf("left-[%dpx]", i*20)
+				wrapper := Div(
+					Class("absolute "+offset+" z-"+fmt.Sprint(100+i)),
+					standardCardFace(c, false),
+				)
+				nodes = append(nodes, wrapper)
+			}
+			return nodes
+		}()),
 	)
 }
 
@@ -356,22 +532,6 @@ func joinScreen(room string, playerId string) *Node {
 	return Div(
 		joinUI,
 	)
-}
-
-// newGameState returns a shuffled standard deck and a starting hand of 5 cards
-func newGameState() ([]Card, []Card) {
-	all := getStandardDeck()
-	rand.Seed(time.Now().UnixNano())
-	rand.Shuffle(len(all), func(i, j int) { all[i], all[j] = all[j], all[i] })
-	handSize := 5
-	if len(all) < handSize+1 {
-		handSize = len(all) / 2
-	}
-	hand := make([]Card, handSize)
-	copy(hand, all[:handSize])
-	deck := make([]Card, len(all)-handSize)
-	copy(deck, all[handSize:])
-	return deck, hand
 }
 
 // getStandardDeck pulls all standard (52-card) cards from the in-memory store

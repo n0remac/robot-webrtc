@@ -37,9 +37,6 @@ func DefaultLayout(n ...*Node) *Node {
 			HTMXExt,
 		),
 		Body(
-			Script(
-				Src("https://unpkg.com/htmx.org@1.9.12/dist/ext/ws.js"),
-			),
 			Ch(n),
 		),
 	)

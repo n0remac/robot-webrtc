@@ -2,7 +2,6 @@ package main
 
 import (
 	"encoding/json"
-	"fmt"
 	"log"
 	"net/http"
 	"sync"
@@ -100,8 +99,6 @@ func (h *Hub) run() {
 					}
 				} else {
 					for client := range clients {
-						fmt.Println("Sending to client", client.id)
-						fmt.Println("Message ID", msg.Id)
 						if client.id == msg.Id {
 							select {
 							case client.send <- msg.Content:
