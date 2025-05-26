@@ -175,11 +175,11 @@ func (g *Game) NextPhase() {
 			g.Phase = PhaseStartRound
 		}
 	}
+	fmt.Printf("Transitioned to phase: %s\n", g.Phase)
 }
 
 func (g *Game) AllTricksPlayed() bool {
-	// TODO: implement
-	return false
+	return len(g.Players[0].Hand) == 0
 }
 
 func (g *Game) IsGameOver() bool {
