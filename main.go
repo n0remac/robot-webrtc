@@ -53,6 +53,7 @@ func main() {
 	GenerateStory(mux)
 	Trick(mux)
 	Fantasy(mux)
+	Notecard(mux, globalRegistry)
 
 	go hub.run()
 

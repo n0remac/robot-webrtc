@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"fmt"
 	"log"
 	"net/http"
 	"sync"
@@ -135,6 +136,7 @@ func (c *WebsocketClient) readPump() {
 			logError("JSON unmarshal failed", err, map[string]interface{}{"raw": string(message)})
 			return
 		}
+		fmt.Println("Received message:", msgMap)
 
 		typ := msgMap["type"]
 		if typ == nil {
@@ -181,4 +183,26 @@ func withWS(path string, mux *http.ServeMux, handler func(*websocket.Conn)) {
 		log.Printf("WS %s connected", path)
 		handler(conn) // delegate to feature‑specific logic
 	})
+}
+
+func createWebsocket(registry *CommandRegistry) func(http.ResponseWriter, *http.Request) {
+	return func(w http.ResponseWriter, r *http.Request) {
+		room := r.URL.Query().Get("room")
+		playerId := r.URL.Query().Get("playerId")
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			return
+		}
+		defer conn.Close()
+		client := &WebsocketClient{
+			conn:     conn,
+			send:     make(chan []byte, 256),
+			registry: registry,
+			room:     room,
+			id:       playerId,
+		}
+		hub.register <- client
+		go client.writePump()
+		client.readPump()
+	}
 }

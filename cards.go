@@ -3,10 +3,8 @@ package main
 import (
 	"fmt"
 	"log"
-	"math/rand"
 	"net/http"
 	"sync"
-	"time"
 
 	"github.com/google/uuid"
 )
@@ -111,26 +109,21 @@ func lobbyWebsocket(registry *CommandRegistry) func(http.ResponseWriter, *http.R
 
 		engine := RulesList()
 
-		// 1) Validate the play against any HookOnPlay rules (e.g. follow suit)
-		action := GameAction{
-			Type:     "play_card",
-			PlayerID: playerId,
-			CardID:   cardId,
-			Room:     room,
-		}
+		// 1) Validate the play
+		action := GameAction{Type: "play_card", PlayerID: playerId, CardID: cardId, Room: room}
 		if err := engine.ValidateAction(action, game); err != nil {
 			log.Printf("🚫 Invalid play: %v", err)
 			return
 		}
-		engine.ApplyEffects(action, game) // apply any immediate effects
+		engine.ApplyEffects(action, game)
 
-		// 2) Phase transition: from TrickStart → TrickPlay on first card
+		// 2) Enter TrickPlay phase on first card
 		if game.Phase == PhaseTrickStart {
 			game.Phase = PhaseTrickPlay
 			engine.TriggerHook(HookOnPhaseEnter, game, nil)
 		}
 
-		// 3) Remove the card from the player's hand
+		// 3) Remove card from hand
 		var playedCard *Card
 		for pi, p := range game.Players {
 			if p.Id != playerId {
@@ -150,16 +143,12 @@ func lobbyWebsocket(registry *CommandRegistry) func(http.ResponseWriter, *http.R
 			return
 		}
 
-		// 4) Add to the current trick
-		game.PlayedCards = append(game.PlayedCards, CardPlay{
-			PlayerID: playerId,
-			Card:     *playedCard,
-		})
+		// 4) Add to current trick
+		game.PlayedCards = append(game.PlayedCards, CardPlay{PlayerID: playerId, Card: *playedCard})
 
-		// Maybe this should be its own rule or part of the rule it came from?
-		// 5) If trick complete, evaluate end‐of‐trick rules and advance phase
+		// 5) If trick complete
 		if len(game.PlayedCards) == len(game.Players) {
-			// trigger onEndTrick rules
+			// End‐of‐trick rules
 			effects := engine.TriggerHook(HookOnEndTrick, game, nil)
 			for _, eff := range effects {
 				if eff.Type == "award_trick" {
@@ -168,37 +157,57 @@ func lobbyWebsocket(registry *CommandRegistry) func(http.ResponseWriter, *http.R
 					for i, p := range game.Players {
 						if p.Id == winner {
 							game.Players[i].TricksWon++
-							log.Printf("Player %s now has %d tricks", p.Name, game.Players[i].TricksWon)
 							break
 						}
 					}
 				}
 			}
-			// enter TrickEnd phase
+			// Enter TrickEnd phase
 			game.Phase = PhaseTrickEnd
 			engine.TriggerHook(HookOnPhaseEnter, game, nil)
 
-			// clear for next trick and advance
+			// Clear trick and advance phase
 			game.PlayedCards = nil
-			game.NextPhase() // either back to TrickStart or into RoundEnd
+			game.NextPhase() // → TrickStart or RoundEnd
+			game.NextPhase()
 			engine.TriggerHook(HookOnPhaseEnter, game, nil)
+
+			// 6) If we've just started a new round, reshuffle & redeal
+			if game.Phase == PhaseStartRound {
+				// reshuffle & deal
+				game.startNewRound()
+
+				engine.TriggerHook(HookOnPhaseEnter, game, nil)
+				// broadcast fresh hands and cleared trick area
+				for _, p := range game.Players {
+					hub.Broadcast <- WebsocketMessage{
+						Room:    room,
+						Id:      p.Id,
+						Content: []byte(createPlayerHand(game, p.Id).Render()),
+					}
+					hub.Broadcast <- WebsocketMessage{
+						Room:    room,
+						Id:      p.Id,
+						Content: []byte(createTrickArea(game, p.Id).Render()),
+					}
+				}
+				return
+			}
 		}
 
-		// 6) Broadcast updated views to all players
+		// 7) Broadcast updated views
 		for _, p := range game.Players {
-			// refresh hand for the actor
 			if p.Id == playerId {
 				hub.Broadcast <- WebsocketMessage{
 					Room:    room,
-					Content: []byte(createPlayerHand(game, playerId).Render()),
 					Id:      playerId,
+					Content: []byte(createPlayerHand(game, playerId).Render()),
 				}
 			}
-			// refresh trick area for everyone
 			hub.Broadcast <- WebsocketMessage{
 				Room:    room,
-				Content: []byte(createTrickArea(game, p.Id).Render()),
 				Id:      p.Id,
+				Content: []byte(createTrickArea(game, p.Id).Render()),
 			}
 		}
 	})
@@ -259,25 +268,7 @@ func lobbyWebsocket(registry *CommandRegistry) func(http.ResponseWriter, *http.R
 		}
 	})
 
-	return func(w http.ResponseWriter, r *http.Request) {
-		room := r.URL.Query().Get("room")
-		playerId := r.URL.Query().Get("playerId")
-		conn, err := upgrader.Upgrade(w, r, nil)
-		if err != nil {
-			return
-		}
-		defer conn.Close()
-		client := &WebsocketClient{
-			conn:     conn,
-			send:     make(chan []byte, 256),
-			registry: registry,
-			room:     room,
-			id:       playerId,
-		}
-		hub.register <- client
-		go client.writePump()
-		client.readPump()
-	}
+	return createWebsocket(registry)
 }
 
 func renderLobbyPage(w http.ResponseWriter, r *http.Request) {
@@ -578,28 +569,4 @@ func getStandardDeck() []Card {
 		}
 	}
 	return out
-}
-
-func (g *Game) startNewRound() {
-	// 1) Rebuild & shuffle deck
-	deck := getStandardDeck()
-	rand.Seed(time.Now().UnixNano())
-	rand.Shuffle(len(deck), func(i, j int) { deck[i], deck[j] = deck[j], deck[i] })
-	g.Deck = deck
-
-	// 2) Clear previous trick state
-	g.PlayedCards = nil
-
-	// 3) Deal N cards to each player
-	handSize := 5
-	for i := range g.Players {
-		// give them the next handSize cards
-		g.Players[i].Hand = make([]Card, handSize)
-		copy(g.Players[i].Hand, g.Deck[:handSize])
-		// remove them from the deck
-		g.Deck = g.Deck[handSize:]
-	}
-
-	// 4) Reset phase to start_round
-	g.Phase = PhaseStartRound
 }

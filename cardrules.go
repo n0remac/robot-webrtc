@@ -2,7 +2,9 @@ package main
 
 import (
 	"fmt"
+	"math/rand"
 	"sync"
+	"time"
 )
 
 type RankComparer func(a, b Card) int
@@ -189,4 +191,28 @@ func (g *Game) IsGameOver() bool {
 
 func DefaultRankComparer(a, b Card) int {
 	return baseRankOrder[a.Rank] - baseRankOrder[b.Rank]
+}
+
+func (g *Game) startNewRound() {
+	// 1) Rebuild & shuffle deck
+	deck := getStandardDeck()
+	rand.Seed(time.Now().UnixNano())
+	rand.Shuffle(len(deck), func(i, j int) { deck[i], deck[j] = deck[j], deck[i] })
+	g.Deck = deck
+
+	// 2) Clear previous trick state
+	g.PlayedCards = nil
+
+	// 3) Deal N cards to each player
+	handSize := 5
+	for i := range g.Players {
+		// give them the next handSize cards
+		g.Players[i].Hand = make([]Card, handSize)
+		copy(g.Players[i].Hand, g.Deck[:handSize])
+		// remove them from the deck
+		g.Deck = g.Deck[handSize:]
+	}
+
+	// 4) Reset phase to start_round
+	g.Phase = PhaseStartRound
 }
