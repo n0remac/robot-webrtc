@@ -110,12 +110,21 @@ func serveCardThreadPage(w http.ResponseWriter, r *http.Request) {
 		Div(
 			Id("main-content"),
 			Class("container mx-auto p-4"),
+			H1(
+				Class("text-2xl font-bold mb-4"),
+				T("Note to Card Converter"),
+			),
+			P(
+				Class("mb-4"),
+				T("Enter a note below and it will be converted into a trading card with an AI-generated image."),
+			),
 			Div(
 				Id("notes"),
 				Attr("hx-swap-oob", "beforeend"),
 				Class("space-y-4 flex flex-col"),
 			),
 			Form(
+				Class("space-y-4"),
 				Attr("ws-send", "submit"),
 				Input(
 					Type("hidden"),
@@ -123,15 +132,16 @@ func serveCardThreadPage(w http.ResponseWriter, r *http.Request) {
 					Value("createNotecard"),
 				),
 				TextArea(
+					Class("textarea textarea-bordered w-full h-32"),
 					Name("entry"),
 					Rows(4),
 					Placeholder("Enter your note here..."),
 				),
-				Input(
+				Div(Input(
 					Type("submit"),
 					Class("btn btn-primary w-32"),
 					Value("Post"),
-				),
+				)),
 			),
 		),
 	)
