@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"os"
 	"slices"
+	"sort"
 	"sync"
 
 	"github.com/google/uuid"
@@ -24,6 +25,7 @@ var (
 func registerVoting(mux *http.ServeMux, registry *CommandRegistry) {
 	mux.HandleFunc("/vote/{id...}", serveVotingPage)
 	mux.HandleFunc("/vote/api", handleVoteAPI)
+	mux.HandleFunc("/rankings", serveRankingPage)
 }
 
 // serveVotingPage renders the swipe UI using GoDom
@@ -142,7 +144,7 @@ func handleVoteAPI(w http.ResponseWriter, r *http.Request) {
 	} else {
 		page = VoteContainer(*first, roomId)
 	}
-	
+
 	w.Header().Set("Content-Type", "text/html")
 	w.Write([]byte(page.Render()))
 
@@ -292,4 +294,46 @@ func (c *NoteCard) AIEntryOrEntry() string {
 		return c.AIEntry
 	}
 	return c.Entry
+}
+
+func serveRankingPage(w http.ResponseWriter, r *http.Request) {
+	cards, err := loadCards()
+	if err != nil {
+		http.Error(w, "could not load cards", http.StatusInternalServerError)
+		return
+	}
+
+	// sort descending by len(UpVotes)
+	sort.Slice(cards, func(i, j int) bool {
+		return len(cards[i].UpVotes) > len(cards[j].UpVotes)
+	})
+
+	// Create the page with existing cards
+	cardDivs := make([]*Node, 0, len(cards))
+	for _, card := range cards {
+		cardDivs = append(cardDivs, Div(
+			createNoteCardDiv(&card),
+			P(
+				Class("mt-2 text-sm text-gray-600"),
+				T(fmt.Sprintf("👍 %d 👎 %d", len(card.UpVotes), len(card.DownVotes))),
+			),
+		))
+	}
+
+	page := DefaultLayout(
+		Attr("data-theme", "dark"),
+		Div(
+			Class("container mx-auto p-6"),
+			H1(Class("text-3xl font-bold mb-6"), T("🏆 Card Rankings")),
+			Div(
+				Id("notes"),
+				Attr("hx-swap-oob", "beforeend"),
+				Class("space-y-4 flex flex-col items-center"),
+				Ch(cardDivs),
+			),
+		),
+	)
+
+	w.Header().Set("Content-Type", "text/html")
+	w.Write([]byte(page.Render()))
 }
