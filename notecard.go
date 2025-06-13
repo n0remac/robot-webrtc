@@ -15,22 +15,32 @@ import (
 	"github.com/sashabaranov/go-openai"
 )
 
+type Voters struct {
+	Voters []string `json:"voters"`
+}
+
 type NoteCard struct {
 	ID          string
+	RoomID      string
 	Entry       string
 	AIEntry     string
 	ImagePrompt string
 	ImageURL    string
-	Done        bool
-	Error       error
+	UpVotes     []string
+	DownVotes   []string
 }
 
 var (
 	cardSessions      = make(map[string]*NoteCard)
 	cardSessionsMutex sync.Mutex
+	cardsFilePath     = "notecards/cards.json"
+	cardsFileMutex    = &sync.Mutex{}
 )
 
 func Notecard(mux *http.ServeMux, registry *CommandRegistry) {
+	// store a user id in local storage
+
+	registerVoting(mux, registry)
 	apiKey := os.Getenv("OPENAI_API_KEY")
 	if apiKey == "" {
 		log.Fatal("OPENAI_API_KEY not set")
@@ -39,12 +49,14 @@ func Notecard(mux *http.ServeMux, registry *CommandRegistry) {
 
 	registry.RegisterWebsocket("createNotecard", func(_ string, hub *Hub, data map[string]interface{}) {
 		entry := data["entry"].(string)
+		roomID := data["roomID"].(string)
 
 		card := &NoteCard{
-			ID:    "c" + uuid.NewString(),
-			Entry: entry,
-			Done:  false,
-			Error: nil,
+			ID:     "c" + uuid.NewString(),
+			Entry:  entry,
+			RoomID: roomID,
+			UpVotes:  []string{""},
+			DownVotes: []string{""},
 		}
 		cardSessionsMutex.Lock()
 		cardSessions[card.ID] = card
@@ -53,31 +65,31 @@ func Notecard(mux *http.ServeMux, registry *CommandRegistry) {
 		go func(card *NoteCard, hub *Hub) {
 			description, imagePrompt, err := generateCardContent(client, card.Entry)
 			if err != nil {
-				card.Error = err
-				card.Done = true
 				return
 			}
 			card.AIEntry = description
 			card.ImagePrompt = imagePrompt
-			card.Done = true
 
 			hub.Broadcast <- WebsocketMessage{
-				Room:    "notecard",
+				Room:    roomID,
 				Content: []byte(createNoteCardDiv(card).Render()),
 			}
 
 			fmt.Println("Generating image for card:", card.ID)
-			img, err := generateCardImage(client, card, "notecards", "notecards")
+			img, err := generateCardImage(client, card, "notecards", "/notecards")
 			if err != nil {
-				card.Error = err
-				card.Done = true
 				return
 			}
 			card.ImageURL = img
 			fmt.Println("Image generated for card:", card.ID)
 
+			if err := SaveCard(card); err != nil {
+				log.Printf("Error saving card %s: %v", card.ID, err)
+				return
+			}
+
 			hub.Broadcast <- WebsocketMessage{
-				Room:    "notecard",
+				Room:    roomID,
 				Content: []byte(createNoteCardDiv(card).Render()),
 			}
 		}(card, hub)
@@ -92,21 +104,62 @@ func Notecard(mux *http.ServeMux, registry *CommandRegistry) {
 		)
 
 		hub.Broadcast <- WebsocketMessage{
-			Room:    "notecard",
+			Room:    roomID,
 			Content: []byte(content.Render()),
 		}
 	})
 
-	mux.HandleFunc("/notecard", serveCardThreadPage)
+	mux.HandleFunc("/notecard/{id...}", serveCardThreadPage)
 	mux.Handle("/notecards/", http.StripPrefix("/notecards/", http.FileServer(http.Dir("notecards"))))
-
 	mux.HandleFunc("/ws/createNotecard", createWebsocket(registry))
 }
 
 func serveCardThreadPage(w http.ResponseWriter, r *http.Request) {
+	roomId := r.PathValue("id")
+	if roomId == "" {
+		roomId = "r" + uuid.NewString()
+		http.Redirect(w, r, fmt.Sprintf("/notecard/%s", roomId), http.StatusFound)
+	}
+	// open the cards file to read existing cards
+	cardsFileMutex.Lock()
+	defer cardsFileMutex.Unlock()
+	if _, err := os.Stat(cardsFilePath); os.IsNotExist(err) {
+		// If the file doesn't exist, create an empty one
+		if err := os.WriteFile(cardsFilePath, []byte("[]"), 0644); err != nil {
+			http.Error(w, fmt.Sprintf("Error creating cards file: %v", err), http.StatusInternalServerError)
+			return
+		}
+	}
+	// Read existing cards
+	var existingCards []NoteCard
+	data, err := os.ReadFile(cardsFilePath)
+	if err != nil && !os.IsNotExist(err) {
+		http.Error(w, fmt.Sprintf("Error reading cards file: %v", err), http.StatusInternalServerError)
+		return
+	}
+	if err == nil {
+		if err := json.Unmarshal(data, &existingCards); err != nil {
+			http.Error(w, fmt.Sprintf("Error parsing cards file: %v", err), http.StatusInternalServerError)
+			return
+		}
+	}
+	// Filter cards for the current room
+	var cardsInRoom []*NoteCard
+	for _, card := range existingCards {
+		if card.RoomID == roomId {
+			cardsInRoom = append(cardsInRoom, &card)
+		}
+	}
+	// Create the page with existing cards
+	cardDivs := make([]*Node, 0, len(cardsInRoom))
+	for _, card := range cardsInRoom {
+		cardDivs = append(cardDivs, createNoteCardDiv(card))
+	}
+
 	page := DefaultLayout(
 		Attr("hx-ext", "ws"),
-		Attr("ws-connect", "/ws/createNotecard?room=notecard"),
+		Attr("ws-connect", "/ws/createNotecard?room="+roomId),
+		Attr("data-theme", "dark"),
 		Div(
 			Id("main-content"),
 			Class("container mx-auto p-4"),
@@ -121,15 +174,21 @@ func serveCardThreadPage(w http.ResponseWriter, r *http.Request) {
 			Div(
 				Id("notes"),
 				Attr("hx-swap-oob", "beforeend"),
-				Class("space-y-4 flex flex-col"),
+				Class("space-y-4 flex flex-col items-center"),
+				Ch(cardDivs),
 			),
 			Form(
-				Class("space-y-4"),
+				Class("space-y-4 m-4"),
 				Attr("ws-send", "submit"),
 				Input(
 					Type("hidden"),
 					Name("type"),
 					Value("createNotecard"),
+				),
+				Input(
+					Type("hidden"),
+					Name("roomID"),
+					Value(roomId),
 				),
 				TextArea(
 					Class("textarea textarea-bordered w-full h-32"),
@@ -202,7 +261,6 @@ func createNoteCardDiv(c *NoteCard) *Node {
 	}
 
 	return Div(
-		Attr("hx-swap-oob", "outerHTML"),
 		Id(c.ID),
 		Class("box-border w-[240] aspect-[2.5/3.5] border-2 rounded-lg shadow-md overflow-hidden relative"),
 		Attr("style", bgStyle),
@@ -288,4 +346,51 @@ func generateCardImage(client *openai.Client, card *NoteCard, assetDir, urlPrefi
 	// 5) Return the public URL path prefix + filename
 	// e.g. urlPrefix="/static/cards/" -> "/static/cards/<cardID>.png"
 	return filepath.ToSlash(filepath.Join(urlPrefix, filename)), nil
+}
+
+func SaveCard(card *NoteCard) error {
+	cardsFileMutex.Lock()
+	defer cardsFileMutex.Unlock()
+
+	// 1) Read existing file
+	var existing []NoteCard
+	data, err := os.ReadFile(cardsFilePath)
+	if err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("reading %s: %w", cardsFilePath, err)
+	}
+	if err == nil {
+		if err := json.Unmarshal(data, &existing); err != nil {
+			return fmt.Errorf("unmarshal %s: %w", cardsFilePath, err)
+		}
+	}
+
+	// 3) Upsert into slice
+	updated := false
+	for i, ec := range existing {
+		if ec.ID == card.ID {
+			existing[i] = *card
+			updated = true
+			break
+		}
+	}
+	if !updated {
+		existing = append(existing, *card)
+	}
+
+	// 4) Marshal with indentation for readability
+	out, err := json.MarshalIndent(existing, "", "  ")
+	if err != nil {
+		return fmt.Errorf("marshal cards: %w", err)
+	}
+
+	// 5) Write atomically: temp + rename
+	tmpPath := cardsFilePath + ".tmp"
+	if err := os.WriteFile(tmpPath, out, 0644); err != nil {
+		return fmt.Errorf("write temp file: %w", err)
+	}
+	if err := os.Rename(tmpPath, cardsFilePath); err != nil {
+		return fmt.Errorf("rename temp file: %w", err)
+	}
+
+	return nil
 }
