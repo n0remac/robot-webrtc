@@ -96,7 +96,7 @@ func Notecard(mux *http.ServeMux, registry *CommandRegistry) {
 
 		content := Div(
 			Id("notes"),
-			Attr("hx-swap-oob", "beforeend"),
+			Attr("hx-swap-oob", "afterbegin"),
 			Div(
 				Attr("hx-swap-oob", "outerHTML"),
 				createNoteCardDiv(card),
