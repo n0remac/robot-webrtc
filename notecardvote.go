@@ -21,11 +21,57 @@ var (
 	}, 0)
 )
 
-// registerVoting wires up the endpoints
 func registerVoting(mux *http.ServeMux, registry *CommandRegistry) {
 	mux.HandleFunc("/vote/{id...}", serveVotingPage)
 	mux.HandleFunc("/vote/api", handleVoteAPI)
-	mux.HandleFunc("/rankings", serveRankingPage)
+
+	registry.RegisterWebsocket("notecardVoting", func(_ string, hub *Hub, data map[string]interface{}) {
+		roomId := data["roomId"].(string)
+
+		cards, err := loadCards()
+		if err != nil || len(cards) == 0 {
+			fmt.Println("No cards available, initializing empty slice")
+			cards = []NoteCard{}
+		}
+
+		first, err := getUnvotedCard(cards, roomId)
+		var page *Node
+		if err != nil {
+			page = Div(
+				Id("main-content"),
+				Class("flex flex-col items-center p-4 h-screen"),
+				H1(T("No more cards available for voting")),
+				P(T("Check back later or add more cards!")),
+			)
+		} else {
+			page = Div(
+				Id("main-content"),
+				Attr("data-theme", "dark"),
+				VoteContainer(*first, roomId),
+			)
+		}
+
+		hub.Broadcast <- WebsocketMessage{
+			Room:    roomId,
+			Content: []byte(page.Render()),
+		}
+	})
+	registry.RegisterWebsocket("notecardCreating", func(_ string, hub *Hub, data map[string]interface{}) {
+		roomId := data["roomId"].(string)
+
+		hub.Broadcast <- WebsocketMessage{
+			Room:    roomId,
+			Content: []byte(createNoteCardPage(roomId).Render()),
+		}
+	})
+	registry.RegisterWebsocket("notecardRanking", func(_ string, hub *Hub, data map[string]interface{}) {
+		roomId := data["roomId"].(string)
+
+		hub.Broadcast <- WebsocketMessage{
+			Room:    roomId,
+			Content: []byte(createRankingPage(roomId).Render()),
+		}
+	})
 }
 
 // serveVotingPage renders the swipe UI using GoDom
@@ -183,7 +229,7 @@ func VoteContainer(card NoteCard, roomId string) *Node {
 				Input(
 					Type("submit"),
 					Id("down"),
-					Value("←"),
+					Value("👎"),
 					Class("btn btn-outline btn-lg mr-4"),
 				),
 			),
@@ -209,7 +255,7 @@ func VoteContainer(card NoteCard, roomId string) *Node {
 				Input(
 					Type("submit"),
 					Id("up"),
-					Value("→"),
+					Value("👍"),
 					Class("btn btn-outline btn-lg mr-4"),
 				),
 			),
@@ -296,11 +342,11 @@ func (c *NoteCard) AIEntryOrEntry() string {
 	return c.Entry
 }
 
-func serveRankingPage(w http.ResponseWriter, r *http.Request) {
+func createRankingPage(roomId string) *Node {
 	cards, err := loadCards()
 	if err != nil {
-		http.Error(w, "could not load cards", http.StatusInternalServerError)
-		return
+		fmt.Println("No cards available, initializing empty slice")
+		cards = []NoteCard{}
 	}
 
 	// sort descending by len(UpVotes)
@@ -314,26 +360,21 @@ func serveRankingPage(w http.ResponseWriter, r *http.Request) {
 		cardDivs = append(cardDivs, Div(
 			createNoteCardDiv(&card),
 			P(
-				Class("mt-2 text-sm text-gray-600"),
+				Class("mt-2"),
 				T(fmt.Sprintf("👍 %d 👎 %d", len(card.UpVotes), len(card.DownVotes))),
 			),
 		))
 	}
 
-	page := DefaultLayout(
-		Attr("data-theme", "dark"),
+	return Div(
+		Id("main-content"),
+		Class("container mx-auto p-6"),
+		H1(Class("text-3xl font-bold mb-6"), T("🏆 Card Rankings")),
 		Div(
-			Class("container mx-auto p-6"),
-			H1(Class("text-3xl font-bold mb-6"), T("🏆 Card Rankings")),
-			Div(
-				Id("notes"),
-				Attr("hx-swap-oob", "beforeend"),
-				Class("space-y-4 flex flex-col items-center"),
-				Ch(cardDivs),
-			),
+			Id("notes"),
+			Attr("hx-swap-oob", "beforeend"),
+			Class("space-y-4 flex flex-col items-center"),
+			Ch(cardDivs),
 		),
 	)
-
-	w.Header().Set("Content-Type", "text/html")
-	w.Write([]byte(page.Render()))
 }

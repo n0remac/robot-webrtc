@@ -52,10 +52,10 @@ func Notecard(mux *http.ServeMux, registry *CommandRegistry) {
 		roomID := data["roomID"].(string)
 
 		card := &NoteCard{
-			ID:     "c" + uuid.NewString(),
-			Entry:  entry,
-			RoomID: roomID,
-			UpVotes:  []string{""},
+			ID:        "c" + uuid.NewString(),
+			Entry:     entry,
+			RoomID:    roomID,
+			UpVotes:   []string{""},
 			DownVotes: []string{""},
 		}
 		cardSessionsMutex.Lock()
@@ -130,22 +130,89 @@ func serveCardThreadPage(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+
+	page := DefaultLayout(
+		Attr("hx-ext", "ws"),
+		Attr("ws-connect", "/ws/createNotecard?room="+roomId),
+		Attr("data-theme", "dark"),
+		Div(
+			Class("navbar bg-base-100 shadow-sm justify-center"),
+			Form(
+				Class("space-y-4 m-4"),
+				Attr("ws-send", "submit"),
+				Input(
+					Type("hidden"),
+					Name("type"),
+					Value("notecardCreating"),
+				),
+				Input(
+					Type("hidden"),
+					Name("roomId"),
+					Value(roomId),
+				),
+				Input(
+					Type("submit"),
+					Class("btn btn-ghost text-xl"),
+					Value("Create"),
+				),
+			),
+			Form(
+				Class("space-y-4 m-4"),
+				Attr("ws-send", "submit"),
+				Input(
+					Type("hidden"),
+					Name("type"),
+					Value("notecardVoting"),
+				),
+				Input(
+					Type("hidden"),
+					Name("roomId"),
+					Value(roomId),
+				),
+				Input(
+					Type("submit"),
+					Class("btn btn-ghost text-xl"),
+					Value("Vote"),
+				),
+			),
+			Form(
+				Class("space-y-4 m-4"),
+				Attr("ws-send", "submit"),
+				Input(
+					Type("hidden"),
+					Name("type"),
+					Value("notecardRanking"),
+				),
+				Input(
+					Type("hidden"),
+					Name("roomId"),
+					Value(roomId),
+				),
+				Input(
+					Type("submit"),
+					Class("btn btn-ghost text-xl"),
+					Value("Ranking"),
+				),
+			),
+		),
+		createNoteCardPage(roomId),
+	)
+
+	w.Header().Set("Content-Type", "text/html")
+	w.Write([]byte(page.Render()))
+}
+
+func createNoteCardPage(roomId string) *Node {
 	// Read existing cards
-	var existingCards []NoteCard
-	data, err := os.ReadFile(cardsFilePath)
-	if err != nil && !os.IsNotExist(err) {
-		http.Error(w, fmt.Sprintf("Error reading cards file: %v", err), http.StatusInternalServerError)
-		return
+	cards, err := loadCards()
+	if err != nil {
+		fmt.Println("No cards available, initializing empty slice")
+		cards = []NoteCard{}
 	}
-	if err == nil {
-		if err := json.Unmarshal(data, &existingCards); err != nil {
-			http.Error(w, fmt.Sprintf("Error parsing cards file: %v", err), http.StatusInternalServerError)
-			return
-		}
-	}
+
 	// Filter cards for the current room
 	var cardsInRoom []*NoteCard
-	for _, card := range existingCards {
+	for _, card := range cards {
 		if card.RoomID == roomId {
 			cardsInRoom = append(cardsInRoom, &card)
 		}
@@ -156,56 +223,53 @@ func serveCardThreadPage(w http.ResponseWriter, r *http.Request) {
 		cardDivs = append(cardDivs, createNoteCardDiv(card))
 	}
 
-	page := DefaultLayout(
-		Attr("hx-ext", "ws"),
-		Attr("ws-connect", "/ws/createNotecard?room="+roomId),
-		Attr("data-theme", "dark"),
+	return Div(
+		Id("main-content"),
+		Class("container mx-auto p-4"),
+		H1(
+			Class("text-2xl font-bold mb-4 flex justify-center"),
+			T("Note to Card Converter"),
+		),
+		P(
+			Class("mb-4 flex justify-center"),
+			T("Enter a note below and it will be converted into a trading card with an AI-generated image. You can then vote on the cards created by others or view the rankings."),
+		),
+		Form(
+			Class("space-y-4 m-4"),
+			Attr("ws-send", "submit"),
+			Input(
+				Type("hidden"),
+				Name("type"),
+				Value("createNotecard"),
+			),
+			Input(
+				Type("hidden"),
+				Name("roomID"),
+				Value(roomId),
+			),
+			TextArea(
+				Class("textarea textarea-bordered w-full h-32"),
+				Name("entry"),
+				Rows(4),
+				Placeholder("Enter your note here..."),
+			),
+			Div(Input(
+				Type("submit"),
+				Class("btn btn-primary w-32"),
+				Value("Post"),
+			)),
+		),
+		H2(
+			Class("text-xl font-semibold mb-4 flex justify-center"),
+			T("Your Cards"),
+		),
 		Div(
-			Id("main-content"),
-			Class("container mx-auto p-4"),
-			H1(
-				Class("text-2xl font-bold mb-4"),
-				T("Note to Card Converter"),
-			),
-			P(
-				Class("mb-4"),
-				T("Enter a note below and it will be converted into a trading card with an AI-generated image."),
-			),
-			Div(
-				Id("notes"),
-				Attr("hx-swap-oob", "beforeend"),
-				Class("space-y-4 flex flex-col items-center"),
-				Ch(cardDivs),
-			),
-			Form(
-				Class("space-y-4 m-4"),
-				Attr("ws-send", "submit"),
-				Input(
-					Type("hidden"),
-					Name("type"),
-					Value("createNotecard"),
-				),
-				Input(
-					Type("hidden"),
-					Name("roomID"),
-					Value(roomId),
-				),
-				TextArea(
-					Class("textarea textarea-bordered w-full h-32"),
-					Name("entry"),
-					Rows(4),
-					Placeholder("Enter your note here..."),
-				),
-				Div(Input(
-					Type("submit"),
-					Class("btn btn-primary w-32"),
-					Value("Post"),
-				)),
-			),
+			Id("notes"),
+			Attr("hx-swap-oob", "beforeend"),
+			Class("space-y-4 flex flex-col items-center"),
+			Ch(cardDivs),
 		),
 	)
-	w.Header().Set("Content-Type", "text/html")
-	w.Write([]byte(page.Render()))
 }
 
 func generateCardContent(client *openai.Client, prompt string) (string, string, error) {
