@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 
 	"github.com/google/uuid"
@@ -475,8 +476,8 @@ func createNoteCardDiv(c *NoteCard) *Node {
 		)
 	}
 	entry := c.Entry
-	// If the length of the entry is more than 50 characters, Use AIEntry instead
-	if len(c.Entry) > 50 {
+	words := strings.Split(entry, " ")
+	if len(words) > 35 {
 		entry = c.AIEntry
 	}
 
