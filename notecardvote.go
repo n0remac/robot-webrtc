@@ -7,18 +7,8 @@ import (
 	"os"
 	"slices"
 	"sort"
-	"sync"
 
 	"github.com/google/uuid"
-)
-
-// --- Globals for voting ---
-var (
-	voteMutex sync.Mutex
-	votes     = make([]struct {
-		CardID string `json:"card_id"`
-		Vote   string `json:"vote"`
-	}, 0)
 )
 
 func registerVoting(mux *http.ServeMux, registry *CommandRegistry) {
@@ -132,13 +122,6 @@ func handleVoteAPI(w http.ResponseWriter, r *http.Request) {
 	roomId := r.FormValue("room_id")
 
 	fmt.Println("Received vote:", cardId, "Vote:", vote)
-	// persist vote (in-memory; swap for DB/file later)
-	voteMutex.Lock()
-	votes = append(votes, struct {
-		CardID string `json:"card_id"`
-		Vote   string `json:"vote"`
-	}{cardId, vote})
-	voteMutex.Unlock()
 
 	// load next card
 	// TODO: A read database would be better here
@@ -156,8 +139,8 @@ func handleVoteAPI(w http.ResponseWriter, r *http.Request) {
 				http.Error(w, "already voted up", http.StatusBadRequest)
 				return
 			}
-			card.UpVotes = append(card.UpVotes, roomId)
 		}
+		card.UpVotes = append(card.UpVotes, roomId)
 	}
 	if vote == "-1" {
 		for _, upVote := range card.DownVotes {
@@ -165,8 +148,8 @@ func handleVoteAPI(w http.ResponseWriter, r *http.Request) {
 				http.Error(w, "already voted down", http.StatusBadRequest)
 				return
 			}
-			card.DownVotes = append(card.DownVotes, roomId)
 		}
+			card.DownVotes = append(card.DownVotes, roomId)
 	}
 	// TODO: A read database would be better here
 	SaveCard(card)

@@ -55,8 +55,8 @@ func Notecard(mux *http.ServeMux, registry *CommandRegistry) {
 			ID:        "c" + uuid.NewString(),
 			Entry:     entry,
 			RoomID:    roomID,
-			UpVotes:   []string{""},
-			DownVotes: []string{""},
+			UpVotes:   []string{},
+			DownVotes: []string{},
 		}
 		cardSessionsMutex.Lock()
 		cardSessions[card.ID] = card
@@ -109,7 +109,28 @@ func Notecard(mux *http.ServeMux, registry *CommandRegistry) {
 		}
 	})
 
-	mux.HandleFunc("/notecard/{id...}", serveCardThreadPage)
+	mux.HandleFunc("/notecard/{id...}", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet {
+			serveCardThreadPage(w, r)
+		}
+		if r.Method == http.MethodPost {
+			cardId := r.FormValue("cardId")
+			cards, err := loadCards()
+			if err != nil {
+				http.Error(w, "Card ID is required", http.StatusBadRequest)
+				return
+			}
+
+			card, err := getCard(cardId, cards)
+			if err != nil {
+				http.Error(w, fmt.Sprintf("Card not found: %v", err), http.StatusNotFound)
+				return
+			}
+
+			w.Header().Set("Content-Type", "text/html")
+			w.Write([]byte(CardDetailPage(*card).Render()))
+		}
+	})
 	mux.Handle("/notecards/", http.StripPrefix("/notecards/", http.FileServer(http.Dir("notecards"))))
 	mux.HandleFunc("/ws/createNotecard", createWebsocket(registry))
 }
@@ -220,7 +241,13 @@ func createNoteCardPage(roomId string) *Node {
 	// Create the page with existing cards
 	cardDivs := make([]*Node, 0, len(cardsInRoom))
 	for _, card := range cardsInRoom {
-		cardDivs = append(cardDivs, createNoteCardDiv(card))
+		cardDivs = append(cardDivs, Div(
+			Attr("hx-trigger", "click"),
+			Attr("hx-post", "/notecard/?cardId="+card.ID),
+			Attr("hx-target", "#main-content"),
+			Name(card.ID),
+			createNoteCardDiv(card)),
+		)
 	}
 
 	return Div(
@@ -364,6 +391,107 @@ func createSheetDiv(cards []*NoteCard) *Node {
 	return Div(
 		Class("print-sheet grid grid-cols-4 grid-rows-2 gap-0 border border-gray-300 mb-4"),
 		Ch(panels),
+	)
+}
+
+func CardDetailPage(card NoteCard) *Node {
+	return Div(
+		Id("main-content"),
+		Class("container mx-auto p-6 space-y-6"),
+
+		// Title
+		H1(Class("text-3xl font-bold"), T("Card Details")),
+
+		// Show the raw fields
+		Div(
+			Class("space-y-2"),
+			// ID
+			Div(
+				Class("flex"),
+				Span(Class("font-semibold w-32"), T("ID:")),
+				Span(T(card.ID)),
+			),
+			// RoomID
+			Div(
+				Class("flex"),
+				Span(Class("font-semibold w-32"), T("Room ID:")),
+				Span(T(card.RoomID)),
+			),
+			// Entry
+			Div(
+				Class("flex"),
+				Span(Class("font-semibold w-32"), T("Entry:")),
+				Span(T(card.Entry)),
+			),
+			// AIEntry
+			Div(
+				Class("flex"),
+				Span(Class("font-semibold w-32"), T("AI Entry:")),
+				Span(T(card.AIEntry)),
+			),
+			// ImagePrompt
+			Div(
+				Class("flex"),
+				Span(Class("font-semibold w-32"), T("Image Prompt:")),
+				Span(T(card.ImagePrompt)),
+			),
+			// ImageURL + preview
+			Div(
+				Class("flex flex-col"),
+				Span(Class("font-semibold"), T("Image:")),
+				Img(
+					Attr("src", card.ImageURL),
+					Attr("alt", "Card image"),
+					Class("mt-2 w-48 h-48 object-cover rounded"),
+				),
+			),
+			// UpVotes list
+			Div(
+				Class("flex flex-col"),
+				Span(Class("font-semibold"), T("Up Votes:")),
+				Div(
+					Class("flex flex-wrap gap-2 mt-1"),
+					Ch(func() []*Node {
+						var badges []*Node
+						for _, uid := range card.UpVotes {
+							badges = append(badges,
+								Span(
+									Class("px-2 py-1 bg-green-200 text-green-800 rounded"),
+									T(uid),
+								),
+							)
+						}
+						if len(badges) == 0 {
+							badges = []*Node{Span(T("None"))}
+						}
+						return badges
+					}()),
+				),
+			),
+			// DownVotes list
+			Div(
+				Class("flex flex-col"),
+				Span(Class("font-semibold"), T("Down Votes:")),
+				Div(
+					Class("flex flex-wrap gap-2 mt-1"),
+					Ch(func() []*Node {
+						var badges []*Node
+						for _, uid := range card.DownVotes {
+							badges = append(badges,
+								Span(
+									Class("px-2 py-1 bg-red-200 text-red-800 rounded"),
+									T(uid),
+								),
+							)
+						}
+						if len(badges) == 0 {
+							badges = []*Node{Span(T("None"))}
+						}
+						return badges
+					}()),
+				),
+			),
+		),
 	)
 }
 
