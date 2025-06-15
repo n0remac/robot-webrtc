@@ -110,25 +110,95 @@ func Notecard(mux *http.ServeMux, registry *CommandRegistry) {
 	})
 
 	mux.HandleFunc("/notecard/{id...}", func(w http.ResponseWriter, r *http.Request) {
-		if r.Method == http.MethodGet {
+		switch r.Method {
+		case http.MethodGet:
 			serveCardThreadPage(w, r)
-		}
-		if r.Method == http.MethodPost {
+
+		case http.MethodPost:
+			// show edit form
 			cardId := r.FormValue("cardId")
 			cards, err := loadCards()
 			if err != nil {
-				http.Error(w, "Card ID is required", http.StatusBadRequest)
+				http.Error(w, "could not load cards", http.StatusInternalServerError)
+				return
+			}
+			card, err := getCard(cardId, cards)
+			if err != nil {
+				http.Error(w, fmt.Sprintf("Card not found: %v", err), http.StatusNotFound)
+				return
+			}
+			w.Header().Set("Content-Type", "text/html")
+			w.Write([]byte(CardEditPage(*card).Render()))
+
+		case http.MethodPut:
+			// handle update
+			// 1) parse form (allows file upload)
+			if err := r.ParseMultipartForm(32 << 20); err != nil {
+				http.Error(w, "invalid form data", http.StatusBadRequest)
 				return
 			}
 
+			// 2) lookup the card
+			cardId := r.FormValue("cardId")
+			cards, err := loadCards()
+			if err != nil {
+				http.Error(w, "could not load cards", http.StatusInternalServerError)
+				return
+			}
 			card, err := getCard(cardId, cards)
 			if err != nil {
 				http.Error(w, fmt.Sprintf("Card not found: %v", err), http.StatusNotFound)
 				return
 			}
 
+			// 3) update entry
+			if entry := r.FormValue("entry"); entry != "" {
+				card.Entry = entry
+			}
+
+			// 4) process image upload (if any)
+			file, fh, err := r.FormFile("image")
+			if err == nil {
+				defer file.Close()
+				// ensure notecards dir exists
+				if err := os.MkdirAll("notecards", 0755); err != nil {
+					http.Error(w, "could not save image", http.StatusInternalServerError)
+					return
+				}
+				// pick an extension
+				ext := filepath.Ext(fh.Filename)
+				if ext == "" {
+					ext = ".png"
+				}
+				filename := card.ID + ext
+				dst := filepath.Join("notecards", filename)
+				out, err := os.Create(dst)
+				if err != nil {
+					http.Error(w, "could not save image", http.StatusInternalServerError)
+					return
+				}
+				defer out.Close()
+				if _, err := io.Copy(out, file); err != nil {
+					http.Error(w, "could not write image", http.StatusInternalServerError)
+					return
+				}
+				// update the public URL
+				card.ImageURL = "/notecards/" + filename
+			}
+			// if err != nil, no file was uploaded—leave ImageURL unchanged
+
+			// 5) persist the change
+			if err := SaveCard(card); err != nil {
+				http.Error(w, "could not save card", http.StatusInternalServerError)
+				return
+			}
+
+			// 6) re-render the detail page with updated data
 			w.Header().Set("Content-Type", "text/html")
 			w.Write([]byte(CardDetailPage(*card).Render()))
+
+		default:
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		}
 	})
 	mux.Handle("/notecards/", http.StripPrefix("/notecards/", http.FileServer(http.Dir("notecards"))))
@@ -221,6 +291,64 @@ func serveCardThreadPage(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "text/html")
 	w.Write([]byte(page.Render()))
+}
+
+func CardEditPage(card NoteCard) *Node {
+	editURL := fmt.Sprintf("/notecard/?cardId=%s", card.ID)
+	return Div(
+		Id("edit-container"),
+		Class("container mx-auto p-6"),
+
+		H1(Class("text-2xl font-bold mb-4"), T("Edit Card")),
+
+		Form(
+			// HTMX will send a PUT request with multipart/form-data
+			Attr("hx-put", editURL),
+			Attr("hx-encoding", "multipart/form-data"),
+			Attr("hx-target", "#edit-container"),
+			Attr("hx-swap", "outerHTML"),
+
+			// hidden payload
+			Input(Type("hidden"), Name("cardId"), Value(card.ID)),
+
+			// Image upload & preview
+			Div(
+				Class("mb-6"),
+				Label(Class("block font-semibold mb-2"), T("Image")),
+				Img(
+					Attr("src", card.ImageURL),
+					Class("w-48 h-48 object-cover rounded mb-2 border"),
+					Attr("alt", "Current card image"),
+				),
+				Input(
+					Type("file"),
+					Name("image"),
+					Class("file-input file-input-bordered w-full"),
+				),
+			),
+
+			// Entry textarea
+			Div(
+				Class("mb-6"),
+				Label(Class("block font-semibold mb-2"), T("Entry")),
+				TextArea(
+					Class("textarea textarea-bordered w-full h-32"),
+					Name("entry"),
+					T(card.Entry),
+				),
+			),
+
+			// Submit button
+			Div(
+				Class("flex justify-end"),
+				Input(
+					Type("submit"),
+					Class("btn btn-primary"),
+					Value("Save Changes"),
+				),
+			),
+		),
+	)
 }
 
 func createNoteCardPage(roomId string) *Node {
@@ -347,7 +475,8 @@ func createNoteCardDiv(c *NoteCard) *Node {
 		)
 	}
 	entry := c.Entry
-	if c.AIEntry != "" {
+	// If the length of the entry is more than 50 characters, Use AIEntry instead
+	if len(c.Entry) > 50 {
 		entry = c.AIEntry
 	}
 
