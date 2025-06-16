@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 
@@ -73,7 +74,7 @@ func Notecard(mux *http.ServeMux, registry *CommandRegistry) {
 
 			hub.Broadcast <- WebsocketMessage{
 				Room:    roomID,
-				Content: []byte(createNoteCardDiv(card).Render()),
+				Content: []byte(createEditableCardDiv(card).Render()),
 			}
 
 			fmt.Println("Generating image for card:", card.ID)
@@ -91,7 +92,7 @@ func Notecard(mux *http.ServeMux, registry *CommandRegistry) {
 
 			hub.Broadcast <- WebsocketMessage{
 				Room:    roomID,
-				Content: []byte(createNoteCardDiv(card).Render()),
+				Content: []byte(createEditableCardDiv(card).Render()),
 			}
 		}(card, hub)
 
@@ -99,8 +100,7 @@ func Notecard(mux *http.ServeMux, registry *CommandRegistry) {
 			Id("notes"),
 			Attr("hx-swap-oob", "afterbegin"),
 			Div(
-				Attr("hx-swap-oob", "outerHTML"),
-				createNoteCardDiv(card),
+				createEditableCardDiv(card),
 			),
 		)
 
@@ -109,13 +109,21 @@ func Notecard(mux *http.ServeMux, registry *CommandRegistry) {
 			Content: []byte(content.Render()),
 		}
 	})
+	registry.RegisterWebsocket("notecardCreatingTab", func(_ string, hub *Hub, data map[string]interface{}) {
+		roomId := data["roomId"].(string)
+
+		hub.Broadcast <- WebsocketMessage{
+			Room:    roomId,
+			Content: []byte(createNoteCardPage(roomId).Render()),
+		}
+	})
 
 	mux.HandleFunc("/notecard/{id...}", func(w http.ResponseWriter, r *http.Request) {
 		switch r.Method {
 		case http.MethodGet:
 			serveCardThreadPage(w, r)
 
-		case http.MethodPost:
+		case http.MethodPut:
 			// show edit form
 			cardId := r.FormValue("cardId")
 			cards, err := loadCards()
@@ -129,9 +137,9 @@ func Notecard(mux *http.ServeMux, registry *CommandRegistry) {
 				return
 			}
 			w.Header().Set("Content-Type", "text/html")
-			w.Write([]byte(CardEditPage(*card).Render()))
+			w.Write([]byte(createEditNoteCardDiv(card).Render()))
 
-		case http.MethodPut:
+		case http.MethodPatch:
 			// handle update
 			// 1) parse form (allows file upload)
 			if err := r.ParseMultipartForm(32 << 20); err != nil {
@@ -196,7 +204,7 @@ func Notecard(mux *http.ServeMux, registry *CommandRegistry) {
 
 			// 6) re-render the detail page with updated data
 			w.Header().Set("Content-Type", "text/html")
-			w.Write([]byte(CardDetailPage(*card).Render()))
+			w.Write([]byte(createEditableCardDiv(card).Render()))
 
 		default:
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -227,6 +235,15 @@ func serveCardThreadPage(w http.ResponseWriter, r *http.Request) {
 		Attr("hx-ext", "ws"),
 		Attr("ws-connect", "/ws/createNotecard?room="+roomId),
 		Attr("data-theme", "dark"),
+		Style(Raw(`
+			.fade-in.htmx-added {
+				opacity: 0;
+			}
+			.fade-in {
+				opacity: 1;
+				transition: opacity 1s ease-out;
+			}
+		`)),
 		Div(
 			Class("navbar bg-base-100 shadow-sm justify-center"),
 			Form(
@@ -235,7 +252,7 @@ func serveCardThreadPage(w http.ResponseWriter, r *http.Request) {
 				Input(
 					Type("hidden"),
 					Name("type"),
-					Value("notecardCreating"),
+					Value("notecardCreatingTab"),
 				),
 				Input(
 					Type("hidden"),
@@ -297,16 +314,16 @@ func serveCardThreadPage(w http.ResponseWriter, r *http.Request) {
 func CardEditPage(card NoteCard) *Node {
 	editURL := fmt.Sprintf("/notecard/?cardId=%s", card.ID)
 	return Div(
-		Id("edit-container"),
+		Id(card.ID),
 		Class("container mx-auto p-6"),
 
-		H1(Class("text-2xl font-bold mb-4"), T("Edit Card")),
+		H1(Class("text-2xl font-bold mb-4"), T("Edit Page")),
 
 		Form(
 			// HTMX will send a PUT request with multipart/form-data
-			Attr("hx-put", editURL),
+			Attr("hx-patch", editURL),
 			Attr("hx-encoding", "multipart/form-data"),
-			Attr("hx-target", "#edit-container"),
+			Attr("hx-target", "#main-content"),
 			Attr("hx-swap", "outerHTML"),
 
 			// hidden payload
@@ -367,15 +384,17 @@ func createNoteCardPage(roomId string) *Node {
 			cardsInRoom = append(cardsInRoom, &card)
 		}
 	}
+	slices.Reverse(cardsInRoom)
 	// Create the page with existing cards
 	cardDivs := make([]*Node, 0, len(cardsInRoom))
 	for _, card := range cardsInRoom {
+
+		createNode := createEditableCardDiv(card)
+
 		cardDivs = append(cardDivs, Div(
-			Attr("hx-trigger", "click"),
-			Attr("hx-post", "/notecard/?cardId="+card.ID),
-			Attr("hx-target", "#main-content"),
+			// TODO: click to page goes here
 			Name(card.ID),
-			createNoteCardDiv(card)),
+			createNode),
 		)
 	}
 
@@ -421,11 +440,24 @@ func createNoteCardPage(roomId string) *Node {
 		),
 		Div(
 			Id("notes"),
-			Attr("hx-swap-oob", "beforeend"),
+			Attr("hx-swap", "beforeend settle:1s"),
 			Class("space-y-4 flex flex-col items-center"),
 			Ch(cardDivs),
 		),
 	)
+}
+
+func createEditableCardDiv(card *NoteCard) *Node {
+	createNode := createNoteCardDiv(card)
+	createNode.Children = append(createNode.Children, Span(
+		Attr("hx-trigger", "click"),
+		Attr("hx-put", "/notecard/?cardId="+card.ID),
+		Attr("hx-target", "#"+card.ID),
+		Attr("hx-swap", "outerHTML"),
+		Class("text-black text-2xl font-bold absolute z-10 bg-neutral-400 opacity-75 p-1 m-2 rounded-full right-0"),
+		T("🖉"),
+	))
+	return createNode
 }
 
 func generateCardContent(client *openai.Client, prompt string) (string, string, error) {
@@ -466,7 +498,71 @@ func generateCardContent(client *openai.Client, prompt string) (string, string, 
 	err = json.Unmarshal([]byte(resp.Choices[0].Message.FunctionCall.Arguments), &parsed)
 	return parsed.Entry, parsed.ImagePrompt, err
 }
+func createEditNoteCardDiv(c *NoteCard) *Node {
+	bgStyle := ""
+	if c.ImageURL != "" {
+		bgStyle = fmt.Sprintf(
+			"background-image:url('%s');background-size:cover;background-position:center;",
+			c.ImageURL,
+		)
+	}
+	entry := c.Entry
+	words := strings.Split(entry, " ")
+	if len(words) > 35 {
+		entry = c.AIEntry
+	}
+	editURL := fmt.Sprintf("/notecard/?cardId=%s", c.ID)
 
+	return Div(
+		Id(c.ID),
+		Class("fade-in box-border w-[240] aspect-[2.5/3.5] border-2 rounded-lg shadow-md overflow-hidden relative"),
+		Attr("style", bgStyle),
+
+		Form(
+			// HTMX will send a PUT request with multipart/form-data
+			Attr("hx-patch", editURL),
+			Attr("hx-encoding", "multipart/form-data"),
+			Attr("hx-target", "#"+c.ID),
+			Attr("hx-swap", "outerHTML"),
+
+			// hidden payload
+			Input(Type("hidden"), Name("cardId"), Value(c.ID)),
+			Div(
+				Class("bg-neutral-50 rounded-lg"),
+				Label(
+					Class("block font-semibold bg-gray-950 text-center"),
+					T("Update image"),
+				),
+				Input(
+					Type("file"),
+					Name("image"),
+					Class("file-input file-input-bordered w-full"),
+				),
+			),
+			Div(
+				Class("absolute inset-x-2 bottom-2 bg-neutral-400 opacity-75 p-2 rounded-xl"),
+				Div(
+					Class("text-black text-sm whitespace-normal break-words hyphens-none text-center font-bold"),
+					TextArea(
+						Class("textarea textarea-bordered w-full h-32 bg-neutral-50"),
+						Name("entry"),
+						T(entry),
+					),
+				),
+			),
+
+			// Submit button
+			Div(
+				Class("flex justify-end"),
+				Input(
+					Type("submit"),
+					Class("btn btn-primary rounded-full bottom-2 right-2 absolute"),
+					Value("Save"),
+				),
+			),
+		),
+	)
+}
 func createNoteCardDiv(c *NoteCard) *Node {
 	bgStyle := ""
 	if c.ImageURL != "" {
@@ -483,7 +579,7 @@ func createNoteCardDiv(c *NoteCard) *Node {
 
 	return Div(
 		Id(c.ID),
-		Class("box-border w-[240] aspect-[2.5/3.5] border-2 rounded-lg shadow-md overflow-hidden relative"),
+		Class("fade-in box-border w-[240] aspect-[2.5/3.5] border-2 rounded-lg shadow-md overflow-hidden relative"),
 		Attr("style", bgStyle),
 
 		// inset overlay with padding on both sides

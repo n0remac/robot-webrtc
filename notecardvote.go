@@ -46,14 +46,6 @@ func registerVoting(mux *http.ServeMux, registry *CommandRegistry) {
 			Content: []byte(page.Render()),
 		}
 	})
-	registry.RegisterWebsocket("notecardCreating", func(_ string, hub *Hub, data map[string]interface{}) {
-		roomId := data["roomId"].(string)
-
-		hub.Broadcast <- WebsocketMessage{
-			Room:    roomId,
-			Content: []byte(createNoteCardPage(roomId).Render()),
-		}
-	})
 	registry.RegisterWebsocket("notecardRanking", func(_ string, hub *Hub, data map[string]interface{}) {
 		roomId := data["roomId"].(string)
 
