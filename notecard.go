@@ -311,64 +311,6 @@ func serveCardThreadPage(w http.ResponseWriter, r *http.Request) {
 	w.Write([]byte(page.Render()))
 }
 
-func CardEditPage(card NoteCard) *Node {
-	editURL := fmt.Sprintf("/notecard/?cardId=%s", card.ID)
-	return Div(
-		Id(card.ID),
-		Class("container mx-auto p-6"),
-
-		H1(Class("text-2xl font-bold mb-4"), T("Edit Page")),
-
-		Form(
-			// HTMX will send a PUT request with multipart/form-data
-			Attr("hx-patch", editURL),
-			Attr("hx-encoding", "multipart/form-data"),
-			Attr("hx-target", "#main-content"),
-			Attr("hx-swap", "outerHTML"),
-
-			// hidden payload
-			Input(Type("hidden"), Name("cardId"), Value(card.ID)),
-
-			// Image upload & preview
-			Div(
-				Class("mb-6"),
-				Label(Class("block font-semibold mb-2"), T("Image")),
-				Img(
-					Attr("src", card.ImageURL),
-					Class("w-48 h-48 object-cover rounded mb-2 border"),
-					Attr("alt", "Current card image"),
-				),
-				Input(
-					Type("file"),
-					Name("image"),
-					Class("file-input file-input-bordered w-full"),
-				),
-			),
-
-			// Entry textarea
-			Div(
-				Class("mb-6"),
-				Label(Class("block font-semibold mb-2"), T("Entry")),
-				TextArea(
-					Class("textarea textarea-bordered w-full h-32"),
-					Name("entry"),
-					T(card.Entry),
-				),
-			),
-
-			// Submit button
-			Div(
-				Class("flex justify-end"),
-				Input(
-					Type("submit"),
-					Class("btn btn-primary"),
-					Value("Save Changes"),
-				),
-			),
-		),
-	)
-}
-
 func createNoteCardPage(roomId string) *Node {
 	// Read existing cards
 	cards, err := loadCards()
@@ -544,7 +486,7 @@ func createEditNoteCardDiv(c *NoteCard) *Node {
 				Div(
 					Class("text-black text-sm whitespace-normal break-words hyphens-none text-center font-bold"),
 					TextArea(
-						Class("textarea textarea-bordered w-full h-32 bg-neutral-50"),
+						Class("textarea textarea-bordered w-full bg-neutral-50"),
 						Name("entry"),
 						T(entry),
 					),
