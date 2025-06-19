@@ -24,20 +24,20 @@ import (
 
 type Book struct {
 	Title string          `json:"title"`
-	Pages map[string]Page `json:"pages"`
+	Pages map[string]StoryPage `json:"pages"`
 }
 
-type Page struct {
+type StoryPage struct {
 	Text             string `json:"text"`
 	ImageDescription string `json:"image_description"`
 	ImagePath        string `json:"image_path"` // Where we store the local path to the PNG
 }
 
 // Some models might return pages as an array; handle both
-type PagesArray []Page
+type PagesArray []StoryPage
 
-func tryUnmarshalPages(data []byte) (map[string]Page, error) {
-	obj := make(map[string]Page)
+func tryUnmarshalPages(data []byte) (map[string]StoryPage, error) {
+	obj := make(map[string]StoryPage)
 	if err := json.Unmarshal(data, &obj); err == nil {
 		return obj, nil
 	}
@@ -45,7 +45,7 @@ func tryUnmarshalPages(data []byte) (map[string]Page, error) {
 	if err := json.Unmarshal(data, &arr); err != nil {
 		return nil, fmt.Errorf("pages is not an object nor an array")
 	}
-	obj = make(map[string]Page)
+	obj = make(map[string]StoryPage)
 	for i, p := range arr {
 		obj[strconv.Itoa(i+1)] = p
 	}

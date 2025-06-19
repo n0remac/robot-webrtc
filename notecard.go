@@ -13,6 +13,9 @@ import (
 	"strings"
 	"sync"
 
+	"robot-webrtc/db"
+	"robot-webrtc/deps"
+
 	"github.com/google/uuid"
 	"github.com/sashabaranov/go-openai"
 )
@@ -22,14 +25,21 @@ type Voters struct {
 }
 
 type NoteCard struct {
-	ID          string
-	RoomID      string
+	ID         string
+	RoomID     string
+	ShortEntry string
+	LongEntry  string
+	ImageURL   string
+	// TODO think about moving these to a separate struct
 	Entry       string
 	AIEntry     string
 	ImagePrompt string
-	ImageURL    string
 	UpVotes     []string
 	DownVotes   []string
+}
+
+type AppConfig struct {
+	DB string `json:"db"`
 }
 
 var (
@@ -40,8 +50,13 @@ var (
 )
 
 func Notecard(mux *http.ServeMux, registry *CommandRegistry) {
-	// store a user id in local storage
+	docs := db.NewSqliteDocumentStore("data/docs.db")
+	deps := &deps.Deps{
+		DB:   db.LoadDB("sqlite://data/db.sqlite"),
+		Docs: docs,
+	}
 
+	registerPageRoutes(mux, registry, deps)
 	registerVoting(mux, registry)
 	apiKey := os.Getenv("OPENAI_API_KEY")
 	if apiKey == "" {
@@ -330,14 +345,7 @@ func createNoteCardPage(roomId string) *Node {
 	// Create the page with existing cards
 	cardDivs := make([]*Node, 0, len(cardsInRoom))
 	for _, card := range cardsInRoom {
-
-		createNode := createEditableCardDiv(card)
-
-		cardDivs = append(cardDivs, Div(
-			// TODO: click to page goes here
-			Name(card.ID),
-			createNode),
-		)
+		cardDivs = append(cardDivs, createEditableCardDiv(card))
 	}
 
 	return Div(
@@ -392,12 +400,35 @@ func createNoteCardPage(roomId string) *Node {
 func createEditableCardDiv(card *NoteCard) *Node {
 	createNode := createNoteCardDiv(card)
 	createNode.Children = append(createNode.Children, Span(
+		Class("text-black text-2xl font-bold absolute z-10 bg-neutral-400 opacity-75 p-1 m-2 rounded-full left-0"),
+		Form(
+			// Send an HTTP PUT to /page/{id}
+			Attr("hx-get", fmt.Sprintf("/page/%s", card.ID)),
+			// Replace the main-content div with the response
+			Attr("hx-target", "#main-content"),
+			Attr("hx-swap", "outerHTML"),
+
+			// Must include roomId and pageId so the handler can load the right record
+			Input(Type("hidden"), Name("roomId"), Value(card.RoomID)),
+			Input(Type("hidden"), Name("pageId"), Value(card.ID)),
+
+			// The submit button you click to load the page editor
+			Input(
+				Type("submit"),
+				Class("btn btn-ghost text-xl"),
+				Value("Page"),
+			),
+		),
+	))
+
+	createNode.Children = append(createNode.Children, Span(
 		Attr("hx-trigger", "click"),
 		Attr("hx-put", "/notecard/?cardId="+card.ID),
 		Attr("hx-target", "#"+card.ID),
 		Attr("hx-swap", "outerHTML"),
 		Class("text-black text-2xl font-bold absolute z-10 bg-neutral-400 opacity-75 p-1 m-2 rounded-full right-0"),
-		T("🖉"),
+		// T("🖉"),
+		T("Edit"),
 	))
 	return createNode
 }
@@ -440,7 +471,8 @@ func generateCardContent(client *openai.Client, prompt string) (string, string, 
 	err = json.Unmarshal([]byte(resp.Choices[0].Message.FunctionCall.Arguments), &parsed)
 	return parsed.Entry, parsed.ImagePrompt, err
 }
-func createEditNoteCardDiv(c *NoteCard) *Node {
+
+func createEditNoteCardDiv2(c *NoteCard) *Node {
 	bgStyle := ""
 	if c.ImageURL != "" {
 		bgStyle = fmt.Sprintf(
@@ -505,6 +537,120 @@ func createEditNoteCardDiv(c *NoteCard) *Node {
 		),
 	)
 }
+
+func createEditNoteCardDiv(c *NoteCard) *Node {
+	editURL := fmt.Sprintf("/notecard/?cardId=%s", c.ID)
+	bgStyle := ""
+	if c.ImageURL != "" {
+		bgStyle = fmt.Sprintf(
+			"background-image:url('%s');background-size:cover;background-position:center;",
+			c.ImageURL,
+		)
+	}
+
+	return Div(
+		Id(c.ID),
+		Class("fade-in box-border w-[240] aspect-[2.5/3.5] border-2 rounded-lg shadow-md overflow-hidden relative"),
+		Attr("style", bgStyle),
+
+		// Flip button
+		Button(
+			Type("button"),
+			Id("flip-btn-"+c.ID),
+			Class("btn btn-sm absolute top-2 right-2"),
+			T("Flip"),
+		),
+
+		// Front side: image + ShortEntry
+		Form(
+			Id(c.ID+"-front"),
+			// HTMX will send a PUT request with multipart/form-data
+			Attr("hx-patch", editURL),
+			Attr("hx-encoding", "multipart/form-data"),
+			Attr("hx-target", "#"+c.ID),
+			Attr("hx-swap", "outerHTML"),
+
+			// hidden payload
+			Input(Type("hidden"), Name("cardId"), Value(c.ID)),
+			Div(
+				Class("bg-neutral-50 rounded-lg"),
+				Label(
+					Class("block font-semibold bg-gray-950 text-center"),
+					T("Update image"),
+				),
+				Input(
+					Type("file"),
+					Name("image"),
+					Class("file-input file-input-bordered w-full"),
+				),
+			),
+			Div(
+				Class("absolute inset-x-2 bottom-2 bg-neutral-400 opacity-75 p-2 rounded-xl"),
+				Div(
+					Class("text-black text-sm whitespace-normal break-words hyphens-none text-center font-bold"),
+					TextArea(
+						Class("textarea textarea-bordered w-full bg-neutral-50"),
+						Name("entry"),
+						T(c.ShortEntry),
+					),
+				),
+			),
+
+			// Submit button
+			Div(
+				Class("flex justify-end"),
+				Input(
+					Type("submit"),
+					Class("btn btn-primary rounded-full bottom-2 right-2 absolute"),
+					Value("Save"),
+				),
+			),
+		),
+
+		// Back side: LongEntry
+		Form(
+			Class("hidden"),
+			Id(c.ID+"-back"),
+			Attr("hx-patch", editURL),
+			Attr("hx-target", "#"+c.ID),
+			Attr("hx-swap", "outerHTML"),
+
+			Input(Type("hidden"), Name("cardId"), Value(c.ID)),
+
+			// LongEntry
+			Div(
+				Class("flex-grow"),
+				Label(Class("block font-semibold"), T("Long Entry")),
+				TextArea(
+					Class("textarea textarea-bordered w-full h-40"),
+					Name("LongEntry"),
+					T(c.LongEntry),
+				),
+			),
+
+			// Save back
+			Div(
+				Class("flex justify-end mt-2"),
+				Input(
+					Type("submit"),
+					Class("btn btn-secondary"),
+					Value("Save Back"),
+				),
+			),
+		),
+
+		// JS to toggle front/back
+		Script(Raw(fmt.Sprintf(`
+            document.getElementById("flip-btn-%[1]s").addEventListener("click", function(){
+                const front = document.getElementById("%[1]s-front");
+                const back  = document.getElementById("%[1]s-back");
+                front.classList.toggle("hidden");
+                back.classList.toggle("hidden");
+            });
+        `, c.ID))),
+	)
+}
+
 func createNoteCardDiv(c *NoteCard) *Node {
 	bgStyle := ""
 	if c.ImageURL != "" {
@@ -559,107 +705,6 @@ func createSheetDiv(cards []*NoteCard) *Node {
 	return Div(
 		Class("print-sheet grid grid-cols-4 grid-rows-2 gap-0 border border-gray-300 mb-4"),
 		Ch(panels),
-	)
-}
-
-func CardDetailPage(card NoteCard) *Node {
-	return Div(
-		Id("main-content"),
-		Class("container mx-auto p-6 space-y-6"),
-
-		// Title
-		H1(Class("text-3xl font-bold"), T("Card Details")),
-
-		// Show the raw fields
-		Div(
-			Class("space-y-2"),
-			// ID
-			Div(
-				Class("flex"),
-				Span(Class("font-semibold w-32"), T("ID:")),
-				Span(T(card.ID)),
-			),
-			// RoomID
-			Div(
-				Class("flex"),
-				Span(Class("font-semibold w-32"), T("Room ID:")),
-				Span(T(card.RoomID)),
-			),
-			// Entry
-			Div(
-				Class("flex"),
-				Span(Class("font-semibold w-32"), T("Entry:")),
-				Span(T(card.Entry)),
-			),
-			// AIEntry
-			Div(
-				Class("flex"),
-				Span(Class("font-semibold w-32"), T("AI Entry:")),
-				Span(T(card.AIEntry)),
-			),
-			// ImagePrompt
-			Div(
-				Class("flex"),
-				Span(Class("font-semibold w-32"), T("Image Prompt:")),
-				Span(T(card.ImagePrompt)),
-			),
-			// ImageURL + preview
-			Div(
-				Class("flex flex-col"),
-				Span(Class("font-semibold"), T("Image:")),
-				Img(
-					Attr("src", card.ImageURL),
-					Attr("alt", "Card image"),
-					Class("mt-2 w-48 h-48 object-cover rounded"),
-				),
-			),
-			// UpVotes list
-			Div(
-				Class("flex flex-col"),
-				Span(Class("font-semibold"), T("Up Votes:")),
-				Div(
-					Class("flex flex-wrap gap-2 mt-1"),
-					Ch(func() []*Node {
-						var badges []*Node
-						for _, uid := range card.UpVotes {
-							badges = append(badges,
-								Span(
-									Class("px-2 py-1 bg-green-200 text-green-800 rounded"),
-									T(uid),
-								),
-							)
-						}
-						if len(badges) == 0 {
-							badges = []*Node{Span(T("None"))}
-						}
-						return badges
-					}()),
-				),
-			),
-			// DownVotes list
-			Div(
-				Class("flex flex-col"),
-				Span(Class("font-semibold"), T("Down Votes:")),
-				Div(
-					Class("flex flex-wrap gap-2 mt-1"),
-					Ch(func() []*Node {
-						var badges []*Node
-						for _, uid := range card.DownVotes {
-							badges = append(badges,
-								Span(
-									Class("px-2 py-1 bg-red-200 text-red-800 rounded"),
-									T(uid),
-								),
-							)
-						}
-						if len(badges) == 0 {
-							badges = []*Node{Span(T("None"))}
-						}
-						return badges
-					}()),
-				),
-			),
-		),
 	)
 }
 

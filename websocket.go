@@ -2,7 +2,6 @@ package main
 
 import (
 	"encoding/json"
-	"fmt"
 	"log"
 	"net/http"
 	"sync"
@@ -136,7 +135,6 @@ func (c *WebsocketClient) readPump() {
 			logError("JSON unmarshal failed", err, map[string]interface{}{"raw": string(message)})
 			return
 		}
-		fmt.Println("Received message:", msgMap)
 
 		typ := msgMap["type"]
 		if typ == nil {
