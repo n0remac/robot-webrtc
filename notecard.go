@@ -89,6 +89,7 @@ func Notecard(mux *http.ServeMux, registry *CommandRegistry) {
 
 			// 2) lookup the card
 			cardId := r.FormValue("cardId")
+			roomId := r.FormValue("roomID")
 			cards, err := loadCards()
 			if err != nil {
 				http.Error(w, "could not load cards", http.StatusInternalServerError)
@@ -96,8 +97,15 @@ func Notecard(mux *http.ServeMux, registry *CommandRegistry) {
 			}
 			card, err := getCard(cardId, cards)
 			if err != nil {
-				http.Error(w, fmt.Sprintf("Card not found: %v", err), http.StatusNotFound)
-				return
+				card = &NoteCard{
+					ID:         "c" + uuid.NewString(),
+					ShortEntry: "",
+					LongEntry:  "",
+					ImageURL:   "",
+					RoomID:     roomId,
+					UpVotes:    []string{},
+					DownVotes:  []string{},
+				}
 			}
 
 			// 3) update entry
@@ -184,7 +192,7 @@ func Notecard(mux *http.ServeMux, registry *CommandRegistry) {
 
 			hub.Broadcast <- WebsocketMessage{
 				Room:    roomID,
-				Content: []byte(createEditableCardDiv(card).Render()),
+				Content: []byte(FramedCard(card, createNoteCardDiv(card)).Render()),
 			}
 
 			fmt.Println("Generating image for card:", card.ID)
@@ -202,7 +210,7 @@ func Notecard(mux *http.ServeMux, registry *CommandRegistry) {
 
 			hub.Broadcast <- WebsocketMessage{
 				Room:    roomID,
-				Content: []byte(createEditableCardDiv(card).Render()),
+				Content: []byte(FramedCard(card, createNoteCardDiv(card)).Render()),
 			}
 		}(card, hub)
 
@@ -210,7 +218,7 @@ func Notecard(mux *http.ServeMux, registry *CommandRegistry) {
 			Id("notes"),
 			Attr("hx-swap-oob", "afterbegin"),
 			Div(
-				createEditableCardDiv(card),
+				FramedCard(card, createNoteCardDiv(card)),
 			),
 		)
 
@@ -345,7 +353,11 @@ func createNoteCardPage(roomId string) *Node {
 	// Create the page with existing cards
 	cardDivs := make([]*Node, 0, len(cardsInRoom))
 	for _, card := range cardsInRoom {
-		cardDivs = append(cardDivs, createEditableCardDiv(card))
+		cardDivs = append(cardDivs, FramedCard(card, createNoteCardDiv(card)))
+	}
+
+	emptyCard := &NoteCard{
+		RoomID: roomId,
 	}
 
 	return Div(
@@ -384,6 +396,7 @@ func createNoteCardPage(roomId string) *Node {
 				Value("Post"),
 			)),
 		),
+		FramedCard(emptyCard, createEditNoteCardDiv(emptyCard)),
 		H2(
 			Class("text-xl font-semibold mb-4 flex justify-center"),
 			T("Your Cards"),
@@ -397,7 +410,14 @@ func createNoteCardPage(roomId string) *Node {
 	)
 }
 
-func createEditableCardDiv(card *NoteCard) *Node {
+func FramedCard(card *NoteCard, cardNode *Node) *Node {
+	editHidden := ""
+	saveHidden := "hidden"
+	if card.ID == "" {
+		editHidden = "hidden"
+		saveHidden = ""
+	}
+
 	frame := Div(
 		// outer “frame” border wrapping the card
 		Class("inline-block border-4 border-zinc-500 bg-zinc-500 shadow-md pl-2 pr-2"),
@@ -418,7 +438,7 @@ func createEditableCardDiv(card *NoteCard) *Node {
 		),
 
 		// The card itself gets swapped in/out by its own id
-		createNoteCardDiv(card),
+		cardNode,
 
 		// Footer bar for the Page and Edit buttons
 		Div(
@@ -439,13 +459,13 @@ func createEditableCardDiv(card *NoteCard) *Node {
 						document.getElementById('%s-frame-save').classList.toggle("hidden"); 
 						document.getElementById('%s-frame-edit').classList.toggle("hidden");
 					}})()`, card.ID, card.ID, card.ID))),
-					Class("btn btn-ghost bg-gray-600 rounded-none"),
+					Class("btn btn-ghost bg-gray-600 rounded-none "+editHidden),
 					Value("Edit"),
 				),
 			),
 			Div(
 				Id(card.ID+"-frame-save"),
-				Class("hidden"),
+				Class(saveHidden),
 				Input(
 					Type("submit"),
 					Script(Raw(fmt.Sprintf(`( () => {
@@ -489,6 +509,13 @@ func createEditNoteCardDiv(c *NoteCard) *Node {
 		)
 	}
 
+	target := "#" + c.ID
+	swap := "outerHTML"
+
+	if c.ID == "" {
+		target = "#notes"
+		swap = "afterbegin settle:1s"
+	}
 	return Div(
 		Id(c.ID),
 		Class("fade-in box-border w-[240px] aspect-[2.5/3.5] border-2 rounded-lg shadow-md overflow-hidden relative"),
@@ -500,10 +527,11 @@ func createEditNoteCardDiv(c *NoteCard) *Node {
 			Class("absolute inset-0 flex flex-col justify-between"),
 			Attr("hx-patch", editURL),
 			Attr("hx-encoding", "multipart/form-data"),
-			Attr("hx-target", "#"+c.ID),
-			Attr("hx-swap", "outerHTML"),
+			Attr("hx-target", target),
+			Attr("hx-swap", swap),
 
 			Input(Type("hidden"), Name("cardId"), Value(c.ID)),
+			Input(Type("hidden"), Name("roomID"), Value(c.RoomID)),
 
 			// Image upload
 			Div(
@@ -553,7 +581,7 @@ func createEditNoteCardDiv(c *NoteCard) *Node {
 }
 
 func createNoteCardDiv(c *NoteCard) *Node {
-	bgStyle := ""
+	bgStyle := " "
 	if c.ImageURL != "" {
 		bgStyle = fmt.Sprintf(
 			"background-image:url('%s');background-size:cover;background-position:center;",
