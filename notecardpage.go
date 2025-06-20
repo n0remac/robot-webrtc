@@ -153,7 +153,7 @@ func servePageThreadPage(w http.ResponseWriter, r *http.Request, deps *deps.Deps
 			RoomID: roomId,
 			Title:  "New Page",
 			TextEntries: []string{
-				card.Entry,
+				card.ShortEntry,
 				card.AIEntry,
 			},
 			Images: []string{

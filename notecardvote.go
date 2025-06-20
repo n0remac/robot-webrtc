@@ -314,7 +314,7 @@ func (c *NoteCard) AIEntryOrEntry() string {
 	if c.AIEntry != "" {
 		return c.AIEntry
 	}
-	return c.Entry
+	return c.ShortEntry
 }
 
 func createRankingPage(roomId string) *Node {
