@@ -9,12 +9,15 @@ import (
 	"periph.io/x/conn/v3/gpio"
 	"periph.io/x/conn/v3/gpio/gpioreg"
 	"periph.io/x/host/v3"
+	_ "periph.io/x/host/v3/bcm283x" // CPU driver
 	"periph.io/x/host/v3/rpi"
+	_ "periph.io/x/host/v3/rpi"   // header-pin definitions
+	_ "periph.io/x/host/v3/sysfs" // sysfs fallback GPIO driver
 )
 
 func init() {
 	if _, err := host.Init(); err != nil {
-		log.Fatalf("failed to initialize periph: %v", err)
+		log.Fatalf("periph host.Init: %v", err)
 	}
 }
 
