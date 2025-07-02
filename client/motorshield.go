@@ -127,6 +127,10 @@ type motorConfig struct {
 }
 
 var motorConfigs = map[string]map[int]motorConfig{
+	"MOTOR1": {
+		1: {ePin: rpi.P1_11, fPin: rpi.P1_15, rPin: rpi.P1_13, arrowID: 4},
+		2: {ePin: rpi.P1_11, fPin: rpi.P1_13, rPin: rpi.P1_15, arrowID: 4},
+	},
 	"MOTOR2": {
 		1: {
 			ePin:    rpi.P1_22, // BCM25
