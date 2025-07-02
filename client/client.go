@@ -21,6 +21,8 @@ import (
 	"periph.io/x/devices/v3/pca9685"
 )
 
+var wsWriteMu sync.Mutex
+
 // TURN credentials struct
 type turnCreds struct {
 	Username   string   `json:"username"`
@@ -273,6 +275,8 @@ func handleSignal(
 		}
 
 		// 5) send it
+		wsWriteMu.Lock()
+		defer wsWriteMu.Unlock()
 		ws.WriteJSON(map[string]interface{}{
 			"type":   "answer",
 			"answer": pc.LocalDescription(),
@@ -395,6 +399,8 @@ func createPeerConnection(
 			log.Printf("OnNegotiationNeeded SetLocalDescription: %v", err)
 			return
 		}
+		wsWriteMu.Lock()
+		defer wsWriteMu.Unlock()
 		ws.WriteJSON(map[string]interface{}{
 			"type":  "offer",
 			"offer": pc.LocalDescription(),
@@ -415,6 +421,8 @@ func createPeerConnection(
 		if c == nil {
 			return
 		}
+		wsWriteMu.Lock()
+		defer wsWriteMu.Unlock()
 		ws.WriteJSON(map[string]interface{}{
 			"type":      "candidate",
 			"candidate": c.ToJSON(),
@@ -456,6 +464,8 @@ func restartICE(pc *webrtc.PeerConnection, ws *websocket.Conn, myID, peerID, roo
 		log.Println("ICE-restart SetLocalDesc:", err)
 		return
 	}
+	wsWriteMu.Lock()
+	defer wsWriteMu.Unlock()
 	ws.WriteJSON(map[string]interface{}{
 		"type":  "offer",
 		"offer": pc.LocalDescription(),
@@ -478,6 +488,8 @@ func connectAndSignal(api *webrtc.API, myID, room, wsURL string, motors []*Motor
 	defer ws.Close()
 
 	// send join
+	wsWriteMu.Lock()
+	defer wsWriteMu.Unlock()
 	ws.WriteJSON(map[string]interface{}{"type": "join", "join": myID, "from": myID, "room": room, "name": "robot"})
 
 	// read loop
