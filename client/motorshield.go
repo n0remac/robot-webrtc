@@ -9,6 +9,7 @@ import (
 	"periph.io/x/conn/v3/gpio"
 	"periph.io/x/conn/v3/gpio/gpioreg"
 	"periph.io/x/host/v3"
+	_ "periph.io/x/host/v3/rpi"
 )
 
 func init() {
