@@ -9,7 +9,7 @@ import (
 	"periph.io/x/conn/v3/gpio"
 	"periph.io/x/conn/v3/gpio/gpioreg"
 	"periph.io/x/host/v3"
-	_ "periph.io/x/host/v3/rpi"
+	"periph.io/x/host/v3/rpi"
 )
 
 func init() {
@@ -120,28 +120,54 @@ func (a *Arrow) Off() { _ = a.pin.Out(gpio.Low) }
 // --- Motor ----------------------------------------------------------------
 
 type motorConfig struct {
-	ePinName string
-	fPinName string
-	rPinName string
-	arrowID  int
+	ePin    gpio.PinIO
+	fPin    gpio.PinIO
+	rPin    gpio.PinIO
+	arrowID int
 }
 
 var motorConfigs = map[string]map[int]motorConfig{
-	"MOTOR1": {
-		1: {ePinName: "GPIO17", fPinName: "GPIO22", rPinName: "GPIO27", arrowID: 4},
-		2: {ePinName: "GPIO17", fPinName: "GPIO27", rPinName: "GPIO22", arrowID: 4},
-	},
 	"MOTOR2": {
-		1: {ePinName: "GPIO25", fPinName: "GPIO23", rPinName: "GPIO24", arrowID: 2},
-		2: {ePinName: "GPIO25", fPinName: "GPIO24", rPinName: "GPIO23", arrowID: 2},
+		1: {
+			ePin:    rpi.P1_22, // BCM25
+			fPin:    rpi.P1_16, // BCM23
+			rPin:    rpi.P1_18, // BCM24
+			arrowID: 2,
+		},
+		2: {
+			ePin:    rpi.P1_22, // BCM25
+			fPin:    rpi.P1_18, // BCM24
+			rPin:    rpi.P1_16, // BCM23
+			arrowID: 2,
+		},
 	},
 	"MOTOR3": {
-		1: {ePinName: "GPIO10", fPinName: "GPIO09", rPinName: "GPIO11", arrowID: 2},
-		2: {ePinName: "GPIO10", fPinName: "GPIO11", rPinName: "GPIO09", arrowID: 2},
+		1: {
+			ePin:    rpi.P1_19, // BCM10
+			fPin:    rpi.P1_21, // BCM9
+			rPin:    rpi.P1_23, // BCM11
+			arrowID: 2,
+		},
+		2: {
+			ePin:    rpi.P1_19, // BCM10
+			fPin:    rpi.P1_23, // BCM11
+			rPin:    rpi.P1_21, // BCM9
+			arrowID: 2,
+		},
 	},
 	"MOTOR4": {
-		1: {ePinName: "GPIO12", fPinName: "GPIO08", rPinName: "GPIO07", arrowID: 1},
-		2: {ePinName: "GPIO12", fPinName: "GPIO07", rPinName: "GPIO08", arrowID: 1},
+		1: {
+			ePin:    rpi.P1_32, // BCM12
+			fPin:    rpi.P1_24, // BCM8
+			rPin:    rpi.P1_26, // BCM7
+			arrowID: 1,
+		},
+		2: {
+			ePin:    rpi.P1_32, // BCM12
+			fPin:    rpi.P1_26, // BCM7
+			rPin:    rpi.P1_24, // BCM8
+			arrowID: 1,
+		},
 	},
 }
 
@@ -161,22 +187,16 @@ func NewMotor(name string, cfg int) *Motor {
 	}
 	mc, ok := mcMap[cfg]
 	if !ok {
-		log.Fatalf("invalid config index %d for motor %s", cfg, name)
+		log.Fatalf("invalid motor config %d for %s", cfg, name)
 	}
-	ePin := gpioreg.ByName(mc.ePinName)
-	fPin := gpioreg.ByName(mc.fPinName)
-	rPin := gpioreg.ByName(mc.rPinName)
-	for _, p := range []gpio.PinIO{ePin, fPin, rPin} {
-		if p == nil {
-			log.Fatalf("failed to find GPIO pin for motor %s config %d", name, cfg)
-		}
+	for _, p := range []gpio.PinIO{mc.ePin, mc.fPin, mc.rPin} {
 		if err := p.Out(gpio.Low); err != nil {
-			log.Fatalf("failed to set pin %v low: %v", p, err)
+			log.Fatalf("failed to set %v low: %v", p, err)
 		}
 	}
-	pwm := NewPWM(mc.ePinName, 50)
+	pwm := NewPWM(mc.ePin.Name(), 50)
 	arrow := NewArrow(mc.arrowID)
-	return &Motor{pwm: pwm, fPin: fPin, rPin: rPin, arrow: arrow}
+	return &Motor{pwm: pwm, fPin: mc.fPin, rPin: mc.rPin, arrow: arrow}
 }
 
 // Test mode: toggles the arrow LED instead of driving the motor.
