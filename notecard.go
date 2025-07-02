@@ -58,6 +58,53 @@ func Notecard(mux *http.ServeMux, registry *CommandRegistry) {
 	}
 	client := openai.NewClient(apiKey)
 
+	mux.HandleFunc("/framedcard/{id...}", func(w http.ResponseWriter, r *http.Request) {
+		var card *NoteCard
+		switch r.Method {
+		case http.MethodGet:
+			cardId := r.FormValue("id")
+			roomId := r.FormValue("roomID")
+			fmt.Println("ROOM: ", roomId)
+			shortEntry := r.FormValue("ShortEntry")
+			longEntry := r.FormValue("LongEntry")
+
+			if cardId == "" {
+				cardId = "c" + uuid.NewString()
+				card = &NoteCard{
+					ID:         cardId,
+					ShortEntry: shortEntry,
+					LongEntry:  longEntry,
+					ImageURL:   "",
+					RoomID:     roomId,
+					UpVotes:    []string{},
+					DownVotes:  []string{},
+				}
+			} else {
+				cards, err := loadCards()
+				if err != nil {
+					http.Error(w, "could not load cards", http.StatusInternalServerError)
+					return
+				}
+				card, err = getCard(cardId, cards)
+				card.ShortEntry = shortEntry
+				card.LongEntry = longEntry
+
+				if err != nil {
+					http.Error(w, fmt.Sprintf("Card not found: %v", err), http.StatusNotFound)
+					return
+				}
+			}
+
+			err := SaveCard(card)
+			if err != nil {
+				fmt.Println("Error: ", err)
+			}
+
+			w.Header().Set("Content-Type", "text/html")
+			w.Write([]byte(FramedCard(card, createNoteCardDiv(card)).Render()))
+		}
+	})
+
 	mux.HandleFunc("/notecard/{id...}", func(w http.ResponseWriter, r *http.Request) {
 		switch r.Method {
 		case http.MethodGet:
@@ -362,43 +409,14 @@ func createNoteCardPage(roomId string) *Node {
 
 	return Div(
 		Id("main-content"),
-		Class("container mx-auto p-4"),
+		Class("container mx-auto p-4 flex flex-col items-center"),
 		H1(
-			Class("text-2xl font-bold mb-4 flex justify-center"),
-			T("Note to Card Converter"),
+			Class("text-3xl font-bold mb-4 text-center"),
+			T("Card Creation"),
 		),
-		P(
-			Class("mb-4 flex justify-center"),
-			T("Enter a note below and it will be converted into a trading card with an AI-generated image. You can then vote on the cards created by others or view the rankings."),
-		),
-		Form(
-			Class("space-y-4 m-4"),
-			Attr("ws-send", "submit"),
-			Input(
-				Type("hidden"),
-				Name("type"),
-				Value("createNotecard"),
-			),
-			Input(
-				Type("hidden"),
-				Name("roomID"),
-				Value(roomId),
-			),
-			TextArea(
-				Class("textarea textarea-bordered w-full h-32"),
-				Name("entry"),
-				Rows(4),
-				Placeholder("Enter your note here..."),
-			),
-			Div(Input(
-				Type("submit"),
-				Class("btn btn-primary w-32"),
-				Value("Post"),
-			)),
-		),
-		FramedCard(emptyCard, createEditNoteCardDiv(emptyCard)),
+		createEditNoteCardDiv(emptyCard),
 		H2(
-			Class("text-xl font-semibold mb-4 flex justify-center"),
+			Class("text-xl font-semibold m-4 flex justify-center"),
 			T("Your Cards"),
 		),
 		Div(
@@ -501,6 +519,7 @@ func FramedCard(card *NoteCard, cardNode *Node) *Node {
 
 func createEditNoteCardDiv(c *NoteCard) *Node {
 	editURL := fmt.Sprintf("/notecard/?cardId=%s", c.ID)
+	requestType := "hx-patch"
 	bgStyle := ""
 	if c.ImageURL != "" {
 		bgStyle = fmt.Sprintf(
@@ -511,21 +530,33 @@ func createEditNoteCardDiv(c *NoteCard) *Node {
 
 	target := "#" + c.ID
 	swap := "outerHTML"
+	wrapper := func(n ...*Node) *Node {
+		return Div(
+			Ch(n),
+		)
+	}
 
 	if c.ID == "" {
 		target = "#notes"
+		editURL = fmt.Sprintf("/framedcard/%s", c.ID)
+		requestType = "hx-get"
 		swap = "afterbegin settle:1s"
+		wrapper = func(n ...*Node) *Node {
+			return FramedCard(c, Div(
+				Ch(n),
+			))
+		}
 	}
-	return Div(
+	return wrapper(
 		Id(c.ID),
-		Class("fade-in box-border w-[240px] aspect-[2.5/3.5] border-2 rounded-lg shadow-md overflow-hidden relative"),
+		Class("bg-neutral-200 fade-in box-border w-[240px] aspect-[2.5/3.5] border-2 border-black rounded-lg shadow-md overflow-hidden relative"),
 		Attr("style", bgStyle),
 
 		// Front side
 		Form(
 			Id(c.ID+"-front"),
 			Class("absolute inset-0 flex flex-col justify-between"),
-			Attr("hx-patch", editURL),
+			Attr(requestType, editURL),
 			Attr("hx-encoding", "multipart/form-data"),
 			Attr("hx-target", target),
 			Attr("hx-swap", swap),
@@ -596,7 +627,7 @@ func createNoteCardDiv(c *NoteCard) *Node {
 
 	return Div(
 		Id(c.ID),
-		Class("fade-in box-border w-[240] aspect-[2.5/3.5] border-2 rounded-lg shadow-md overflow-hidden relative"),
+		Class("bg-neutral-200 fade-in box-border w-[240] aspect-[2.5/3.5] border-2 border-black rounded-lg shadow-md overflow-hidden relative"),
 		Attr("style", bgStyle),
 		Div(
 			Class("absolute inset-0 flex flex-col justify-between"),

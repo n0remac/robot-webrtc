@@ -90,33 +90,6 @@ window.addEventListener('beforeunload', () => {
     }
 });
 
-let previewStream;
-async function testCamera() {
-  try {
-    previewStream = await navigator.mediaDevices.getUserMedia({ video: true });
-    const preview = document.getElementById('preview-video');
-    preview.srcObject = previewStream;
-    preview.style.display = 'block';
-    Logger.info('Camera test passed');
-  } catch (err) {
-    alert('Camera access failed: ' + err.message);
-    Logger.error('Camera test failed', err);
-  }
-}
-
-let micStream;
-async function testMic() {
-  try {
-    micStream = await navigator.mediaDevices.getUserMedia({ audio: true });
-    document.getElementById('mic-status').textContent = '🎤 Microphone is working';
-    // optional: hook into Web Audio API to display levels…
-    Logger.info('Mic test passed');
-  } catch (err) {
-    document.getElementById('mic-status').textContent = '❌ Mic access denied';
-    Logger.error('Mic test failed', err);
-  }
-}
-
 async function joinSession() {
     myName = document.getElementById('name').value;
     if (!myName) return alert('Please enter your name');
@@ -199,7 +172,6 @@ async function setupLocalMedia() {
   }
 }
 
-
 function showLocalVideo() {
     const video = Object.assign(document.createElement('video'), {
         id: 'local-video',
@@ -256,7 +228,7 @@ async function connectWebSocket() {
         Logger.info('WebSocket closed', { code: e.code, reason: e.reason });
       }
     };
-  }
+}
 
 function addAudioStream(stream, uuid) {
   console.log("✅ addAudioStream fired:", stream);
@@ -269,7 +241,6 @@ function addAudioStream(stream, uuid) {
   document.body.appendChild(audio);
 }
 
-  
 function addVideoStream(stream, uuid) {
     // if local is still styled as "remote-video", downgrade it to PiP
     const localVid = document.getElementById('local-video');
@@ -325,36 +296,6 @@ function handleUserDisconnect(uuid) {
       } else {
         Logger.warn('no peer connection found', { peer: uuid });
       }
-}
-
-function toggleNoise() {
-    localStream.getAudioTracks().forEach(track => track.enabled = !track.enabled);
-    track.applyConstraints({
-      echoCancellation: true,
-      noiseSuppression: true,
-      autoGainControl: true
-    });
-}
-
-function toggleMute() {
-    localStream.getAudioTracks().forEach(track => track.enabled = !track.enabled);
-    isMuted = !isMuted;
-    document.getElementById('mute-btn').textContent = isMuted ? 'Unmute' : 'Mute';
-    Logger.info('ui:mute‑toggle', {muted: isMuted});
-}
-
-function toggleVideo() {
-    localStream.getVideoTracks().forEach(track => track.enabled = !track.enabled);
-    isVideoStopped = !isVideoStopped;
-    document.getElementById('video-btn').textContent = isVideoStopped ? 'Start Video' : 'Stop Video';
-    Logger.info('ui:video‑toggle', {stopped: isVideoStopped});
-}
-
-function generateUUID() {
-    return 'xxxx-xxxx-4xxx-yxxx-xxxxxx'.replace(/[xy]/g, function(c) {
-        const r = Math.random() * 16 | 0, v = c === 'x' ? r : (r & 0x3 | 0x8);
-        return v.toString(16);
-    });
 }
 
 function createPeerConnection(peerId) {
@@ -503,6 +444,7 @@ function createPeerConnection(peerId) {
   return pc;
 }
 
+
 function createKeyPressEventListener(key, callback) {
   const normalized = key.toLowerCase();
 
@@ -529,3 +471,59 @@ function createKeyPressEventListener(key, callback) {
   window.addEventListener('keyup',   handler, true);
 }
 
+function toggleNoise() {
+    localStream.getAudioTracks().forEach(track => track.enabled = !track.enabled);
+    track.applyConstraints({
+      echoCancellation: true,
+      noiseSuppression: true,
+      autoGainControl: true
+    });
+}
+
+function toggleMute() {
+    localStream.getAudioTracks().forEach(track => track.enabled = !track.enabled);
+    isMuted = !isMuted;
+    document.getElementById('mute-btn').textContent = isMuted ? 'Unmute' : 'Mute';
+    Logger.info('ui:mute‑toggle', {muted: isMuted});
+}
+
+function toggleVideo() {
+    localStream.getVideoTracks().forEach(track => track.enabled = !track.enabled);
+    isVideoStopped = !isVideoStopped;
+    document.getElementById('video-btn').textContent = isVideoStopped ? 'Start Video' : 'Stop Video';
+    Logger.info('ui:video‑toggle', {stopped: isVideoStopped});
+}
+
+function generateUUID() {
+    return 'xxxx-xxxx-4xxx-yxxx-xxxxxx'.replace(/[xy]/g, function(c) {
+        const r = Math.random() * 16 | 0, v = c === 'x' ? r : (r & 0x3 | 0x8);
+        return v.toString(16);
+    });
+}
+
+let previewStream;
+async function testCamera() {
+  try {
+    previewStream = await navigator.mediaDevices.getUserMedia({ video: true });
+    const preview = document.getElementById('preview-video');
+    preview.srcObject = previewStream;
+    preview.style.display = 'block';
+    Logger.info('Camera test passed');
+  } catch (err) {
+    alert('Camera access failed: ' + err.message);
+    Logger.error('Camera test failed', err);
+  }
+}
+
+let micStream;
+async function testMic() {
+  try {
+    micStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    document.getElementById('mic-status').textContent = '🎤 Microphone is working';
+    // optional: hook into Web Audio API to display levels…
+    Logger.info('Mic test passed');
+  } catch (err) {
+    document.getElementById('mic-status').textContent = '❌ Mic access denied';
+    Logger.error('Mic test failed', err);
+  }
+}
