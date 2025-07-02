@@ -17,7 +17,7 @@ import (
 	"periph.io/x/host/v3"
 )
 
-func SetupRobot() ([]*Motor, *pca9685.ServoGroup) {
+func SetupRobot() ([]*Motor, *pca9685.ServoGroup, func()) {
 	// 1) Init Periph
 	if _, err := host.Init(); err != nil {
 		log.Fatal("host.Init:", err)
@@ -28,7 +28,12 @@ func SetupRobot() ([]*Motor, *pca9685.ServoGroup) {
 	if err != nil {
 		log.Fatal("i2creg.Open:", err)
 	}
-	defer bus.Close()
+
+	// define a cleanup function that callers must invoke on shutdown
+	cleanup := func() {
+		bus.Close()
+		rpio.Close()
+	}
 
 	// 3) Software reset the PCA9685 (General Call 0x06)
 	if err := bus.Tx(0x00, []byte{0x06}, nil); err != nil {
@@ -36,7 +41,7 @@ func SetupRobot() ([]*Motor, *pca9685.ServoGroup) {
 	}
 	time.Sleep(10 * time.Millisecond)
 
-	// 4) Now create & configure the driver
+	// 4) Create & configure the driver
 	pca, err := pca9685.NewI2C(bus, pca9685.I2CAddr)
 	if err != nil {
 		log.Fatal("pca9685.NewI2C:", err)
@@ -49,12 +54,13 @@ func SetupRobot() ([]*Motor, *pca9685.ServoGroup) {
 	}
 	servos := pca9685.NewServoGroup(pca, 50, 650, 0, 180)
 
+	// Open GPIO memory
 	if err := rpio.Open(); err != nil {
 		fmt.Println("Unable to open GPIO:", err)
-		return nil, nil
+		return nil, nil, cleanup
 	}
-	defer rpio.Close()
 
+	// Create motors (these will use rpio.Pin under the hood)
 	m1 := NewMotor("MOTOR1", 1)
 	m2 := NewMotor("MOTOR2", 1)
 	m3 := NewMotor("MOTOR3", 1)
@@ -62,7 +68,7 @@ func SetupRobot() ([]*Motor, *pca9685.ServoGroup) {
 
 	motors := []*Motor{m1, m2, m3, m4}
 
-	return motors, servos
+	return motors, servos, cleanup
 }
 
 func Controlls(motors []*Motor, servos *pca9685.ServoGroup) func(msg webrtc.DataChannelMessage) {

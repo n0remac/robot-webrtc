@@ -43,7 +43,8 @@ var (
 
 func main() {
 
-	motors, servos := SetupRobot()
+	motors, servos, cleanup := SetupRobot()
+	defer cleanup()
 
 	// CLI flags
 	server := flag.String("server", "wss://noremac.dev/ws/hub", "signaling server URL")
