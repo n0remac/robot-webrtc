@@ -15,9 +15,14 @@ import (
 )
 
 func init() {
-	if _, err := host.Init(); err != nil {
-		log.Fatalf("periph host.Init: %v", err)
+	state, err := host.Init()
+	if err != nil {
+		log.Fatalf("host.Init: %v", err)
 	}
+	for drv, derr := range state.Failed {
+		log.Printf(" driver %q failed: %v", drv, derr)
+	}
+	log.Printf(" registered drivers: %v", state.Loaded)
 }
 
 // --- Software PWM ---------------------------------------------------------
