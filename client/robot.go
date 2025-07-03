@@ -1,4 +1,4 @@
-package main
+package client
 
 import (
 	"context"
@@ -175,7 +175,7 @@ func Controls(
 	}
 }
 
-func runFFmpegCLI(input, format string, fps int, size, output string, outArgs map[string]string) {
+func RunFFmpegCLI(input, format string, fps int, size, output string, outArgs map[string]string) {
 	// start with global flags
 	args := []string{
 		"-hide_banner",
@@ -218,7 +218,7 @@ func runFFmpegCLI(input, format string, fps int, size, output string, outArgs ma
 }
 
 // runFFmpegFileCLI streams a local file at realtime speed (-re) into a single RTP output URL.
-func runFFmpegFileCLI(inputFile, output string, outArgs map[string]string) {
+func RunFFmpegFileCLI(inputFile, output string, outArgs map[string]string) {
 	// global + -re + input
 	args := []string{
 		"-y",

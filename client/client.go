@@ -1,18 +1,13 @@
-package main
+package client
 
 import (
 	"encoding/json"
-	"flag"
 	"fmt"
 	"io/ioutil"
 	"log"
 	"net"
 	"net/http"
-	"os"
-	"os/signal"
-	"strings"
 	"sync"
-	"syscall"
 	"time"
 
 	pb "robot-webrtc/servo"
@@ -34,117 +29,19 @@ type turnCreds struct {
 
 // global state
 var (
-	peersMu          sync.Mutex
-	peers            = make(map[string]*webrtc.PeerConnection)
+	PeersMu          sync.Mutex
+	Peers            = make(map[string]*webrtc.PeerConnection)
 	makingOfferMu    sync.Mutex
 	makingOffer      = make(map[string]bool)
 	queuedCandsMu    sync.Mutex
 	queuedCandidates = make(map[string][]webrtc.ICECandidateInit)
-	globalIceServers []webrtc.ICEServer
-	videoTrack       *webrtc.TrackLocalStaticRTP
-	audioTrack       *webrtc.TrackLocalStaticRTP
+	GlobalIceServers []webrtc.ICEServer
+	VideoTrack       *webrtc.TrackLocalStaticRTP
+	AudioTrack       *webrtc.TrackLocalStaticRTP
 )
 
-func main() {
-
-	motors := SetupRobot()
-
-	// CLI flags
-	server := flag.String("server", "wss://noremac.dev/ws/hub", "signaling server URL")
-	// server := flag.String("server", "ws://localhost:8080/ws/hub", "signaling server URL")
-	room := flag.String("room", "default", "room name")
-	id := flag.String("id", "", "unique client ID")
-	flag.Parse()
-
-	// generate ID if none provided
-	if *id == "" {
-		*id = fmt.Sprintf("%d", time.Now().UnixNano())
-	}
-	myID := *id
-	log.Printf("My ID: %s", myID)
-
-	// fetch TURN credentials and build ICE servers
-	serverBase := strings.TrimSuffix(strings.TrimPrefix(*server, "wss://"), "/ws/hub")
-	creds, err := fetchTurnCredentials("https://" + serverBase + "/turn-credentials")
-	if err != nil {
-		log.Printf("Warning: could not fetch TURN creds: %v", err)
-	}
-	globalIceServers = []webrtc.ICEServer{{URLs: []string{"stun:stun.l.google.com:19302"}}}
-	if creds != nil {
-		for _, uri := range creds.URLs {
-			globalIceServers = append(globalIceServers,
-				webrtc.ICEServer{URLs: []string{uri}, Username: creds.Username, Credential: creds.Credential},
-			)
-		}
-	}
-
-	// prepare static-RTP tracks
-	m := webrtc.MediaEngine{}
-	m.RegisterCodec(webrtc.RTPCodecParameters{
-		RTPCodecCapability: webrtc.RTPCodecCapability{MimeType: webrtc.MimeTypeH264, ClockRate: 90000, SDPFmtpLine: "packetization-mode=1;profile-level-id=42e01f"},
-		PayloadType:        109,
-	}, webrtc.RTPCodecTypeVideo)
-	m.RegisterCodec(webrtc.RTPCodecParameters{
-		RTPCodecCapability: webrtc.RTPCodecCapability{MimeType: webrtc.MimeTypeOpus, ClockRate: 48000, Channels: 2},
-		PayloadType:        111,
-	}, webrtc.RTPCodecTypeAudio)
-	api := webrtc.NewAPI(webrtc.WithMediaEngine(&m))
-
-	// create local RTP tracks
-	videoTrack, err = webrtc.NewTrackLocalStaticRTP(webrtc.RTPCodecCapability{MimeType: "video/H264"}, "video", "pion-video")
-	if err != nil {
-		log.Fatalf("NewTrackLocalStaticRTP(video): %v", err)
-	}
-	audioTrack, err = webrtc.NewTrackLocalStaticRTP(webrtc.RTPCodecCapability{MimeType: "audio/opus"}, "audio", "pion-audio")
-	if err != nil {
-		log.Fatalf("NewTrackLocalStaticRTP(audio): %v", err)
-	}
-
-	// pump RTP
-	go pumpRTP("[::]:5004", videoTrack, 109)
-	go pumpRTP("[::]:5006", audioTrack, 111)
-
-	// handle graceful shutdown
-	sigCh := make(chan os.Signal, 1)
-	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
-
-	// connect and maintain signalling
-	go func() {
-		for {
-			if err := connectAndSignal(api, myID, *room, *server, motors); err != nil {
-				log.Printf("Signal loop exited with: %v; retrying in 1s...", err)
-			}
-			time.Sleep(time.Second)
-		}
-	}()
-
-	// start FFmpeg push
-	go runFFmpegCLI(
-		"/dev/video0", "v4l2", 30, "640x480",
-		"rtp://127.0.0.1:5004",
-		map[string]string{
-			"vf":           "hflip,vflip",
-			"c:v":          "libx264",
-			"preset":       "ultrafast",
-			"tune":         "zerolatency",
-			"pix_fmt":      "yuv420p",
-			"an":           "",
-			"f":            "rtp",
-			"payload_type": "109",
-		},
-	)
-
-	<-sigCh
-	log.Println("Shutting down: sending leave & closing peers...")
-	peersMu.Lock()
-	for _, pc := range peers {
-		pc.Close()
-	}
-	peersMu.Unlock()
-}
-
 // pumpRTP reads RTP packets from addr and writes them into track
-func pumpRTP(addr string, track *webrtc.TrackLocalStaticRTP, payloadType uint8) {
+func PumpRTP(addr string, track *webrtc.TrackLocalStaticRTP, payloadType uint8) {
 	log.Printf("▶ pumpRTP listening on %s (payload %d) → track %s", addr, payloadType, track.ID())
 	udpAddr, err := net.ResolveUDPAddr("udp", addr)
 	if err != nil {
@@ -209,13 +106,13 @@ func handleSignal(
 
 	// get-or-create (with mutex)
 	getOrCreatePC := func() *webrtc.PeerConnection {
-		peersMu.Lock()
-		defer peersMu.Unlock()
-		if pc := peers[from]; pc != nil {
+		PeersMu.Lock()
+		defer PeersMu.Unlock()
+		if pc := Peers[from]; pc != nil {
 			return pc
 		}
 		pc := createPeerConnection(api, myID, from, room, ws)
-		peers[from] = pc
+		Peers[from] = pc
 		return pc
 	}
 
@@ -296,9 +193,9 @@ func handleSignal(
 
 	case "answer":
 		log.Printf("Received answer from %s", from)
-		peersMu.Lock()
-		pc := peers[from]
-		peersMu.Unlock()
+		PeersMu.Lock()
+		pc := Peers[from]
+		PeersMu.Unlock()
 		if pc == nil {
 			log.Printf("No PC found for %s on answer", from)
 			return
@@ -330,9 +227,9 @@ func handleSignal(
 			SDPMLineIndex: ptrUint16(uint16(raw["sdpMLineIndex"].(float64))),
 		}
 
-		peersMu.Lock()
-		pc := peers[from]
-		peersMu.Unlock()
+		PeersMu.Lock()
+		pc := Peers[from]
+		PeersMu.Unlock()
 		// buffer or add
 		queuedCandsMu.Lock()
 		if pc == nil || pc.RemoteDescription() == nil {
@@ -344,10 +241,10 @@ func handleSignal(
 
 	case "leave":
 		log.Printf("Peer %s left → cleaning up", from)
-		peersMu.Lock()
-		pc := peers[from]
-		delete(peers, from)
-		peersMu.Unlock()
+		PeersMu.Lock()
+		pc := Peers[from]
+		delete(Peers, from)
+		PeersMu.Unlock()
 		if pc != nil {
 			pc.Close()
 		}
@@ -366,7 +263,7 @@ func createPeerConnection(
 	ws *websocket.Conn,
 ) *webrtc.PeerConnection {
 	pc, err := api.NewPeerConnection(webrtc.Configuration{
-		ICEServers: globalIceServers,
+		ICEServers: GlobalIceServers,
 	})
 	if err != nil {
 		log.Fatalf("NewPeerConnection error: %v", err)
@@ -447,10 +344,10 @@ func createPeerConnection(
 	})
 
 	// add tracks _after_ OnNegotiationNeeded is set
-	if _, err := pc.AddTrack(videoTrack); err != nil {
+	if _, err := pc.AddTrack(VideoTrack); err != nil {
 		log.Fatalf("AddTrack video: %v", err)
 	}
-	if _, err := pc.AddTrack(audioTrack); err != nil {
+	if _, err := pc.AddTrack(AudioTrack); err != nil {
 		log.Fatalf("AddTrack audio: %v", err)
 	}
 
@@ -487,7 +384,7 @@ func restartICE(pc *webrtc.PeerConnection, ws *websocket.Conn, myID, peerID, roo
 }
 
 // connectAndSignal manages WebSocket signalling (with auto-reconnect)
-func connectAndSignal(api *webrtc.API, myID, room, wsURL string, motors []*Motor) error {
+func ConnectAndSignal(api *webrtc.API, myID, room, wsURL string, motors []*Motor) error {
 	// dial
 	ws, _, err := websocket.DefaultDialer.Dial(fmt.Sprintf("%s?room=%s", wsURL, room), nil)
 	if err != nil {
@@ -511,7 +408,7 @@ func connectAndSignal(api *webrtc.API, myID, room, wsURL string, motors []*Motor
 }
 
 // fetchTurnCredentials GETs the TURN credentials JSON
-func fetchTurnCredentials(url string) (*turnCreds, error) {
+func FetchTurnCredentials(url string) (*turnCreds, error) {
 	resp, err := http.Get(url)
 	if err != nil {
 		return nil, err
