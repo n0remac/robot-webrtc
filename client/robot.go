@@ -10,7 +10,6 @@ import (
 	"time"
 
 	"github.com/pion/webrtc/v4"
-	"github.com/stianeikeland/go-rpio/v4"
 	"periph.io/x/conn/v3/i2c/i2creg"
 	"periph.io/x/conn/v3/physic"
 	"periph.io/x/devices/v3/pca9685"
@@ -32,7 +31,6 @@ func SetupRobot() ([]*Motor, *pca9685.ServoGroup, func()) {
 	// define a cleanup function that callers must invoke on shutdown
 	cleanup := func() {
 		bus.Close()
-		rpio.Close()
 	}
 
 	// 3) Software reset the PCA9685 (General Call 0x06)
@@ -53,12 +51,6 @@ func SetupRobot() ([]*Motor, *pca9685.ServoGroup, func()) {
 		log.Fatal("SetAllPwm:", err)
 	}
 	servos := pca9685.NewServoGroup(pca, 50, 650, 0, 180)
-
-	// Open GPIO memory
-	if err := rpio.Open(); err != nil {
-		fmt.Println("Unable to open GPIO:", err)
-		return nil, nil, cleanup
-	}
 
 	// Create motors (these will use rpio.Pin under the hood)
 	m1 := NewMotor("MOTOR1", 1)
