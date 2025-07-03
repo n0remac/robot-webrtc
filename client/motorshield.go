@@ -9,10 +9,9 @@ import (
 	"periph.io/x/conn/v3/gpio"
 	"periph.io/x/conn/v3/gpio/gpioreg"
 	"periph.io/x/host/v3"
-	_ "periph.io/x/host/v3/bcm283x" // CPU driver
-	"periph.io/x/host/v3/rpi"
-	_ "periph.io/x/host/v3/rpi"   // header-pin definitions
-	_ "periph.io/x/host/v3/sysfs" // sysfs fallback GPIO driver
+	_ "periph.io/x/host/v3/bcm283x" // enable the BCM283x MMIO driver
+	"periph.io/x/host/v3/rpi"       // header-pin definitions
+	_ "periph.io/x/host/v3/sysfs"   // sysfs fallback GPIO driver
 )
 
 func init() {
