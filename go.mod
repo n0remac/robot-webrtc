@@ -10,7 +10,10 @@ require (
 	github.com/pion/rtp v1.8.13
 	github.com/pion/webrtc/v4 v4.0.15
 	github.com/sashabaranov/go-openai v1.38.1
+	github.com/stianeikeland/go-rpio/v4 v4.6.0
 	github.com/tidwall/gjson v1.18.0
+	google.golang.org/grpc v1.64.0
+	google.golang.org/protobuf v1.33.0
 	gorm.io/driver/postgres v1.6.0
 	gorm.io/driver/sqlite v1.6.0
 	gorm.io/gorm v1.30.0
@@ -33,7 +36,7 @@ require (
 	github.com/couchbase/vellum v1.0.2 // indirect
 	github.com/dustin/go-humanize v1.0.1 // indirect
 	github.com/glycerine/go-unsnap-stream v0.0.0-20181221182339-f9677308dec2 // indirect
-	github.com/golang/protobuf v1.3.2 // indirect
+	github.com/golang/protobuf v1.5.4 // indirect
 	github.com/golang/snappy v0.0.1 // indirect
 	github.com/jackc/pgpassfile v1.0.0 // indirect
 	github.com/jackc/pgservicefile v0.0.0-20240606120523-5a60cdf6a761 // indirect
@@ -71,6 +74,7 @@ require (
 	golang.org/x/net v0.35.0 // indirect
 	golang.org/x/sync v0.11.0 // indirect
 	golang.org/x/text v0.22.0 // indirect
+	google.golang.org/genproto v0.0.0-20230410155749-daa745c078e1 // indirect
 	modernc.org/libc v1.37.6 // indirect
 	modernc.org/mathutil v1.6.0 // indirect
 	modernc.org/memory v1.7.2 // indirect

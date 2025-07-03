@@ -15,10 +15,12 @@ import (
 	"syscall"
 	"time"
 
+	pb "robot-webrtc/servo"
+
 	"github.com/gorilla/websocket"
 	"github.com/pion/rtp"
 	"github.com/pion/webrtc/v4"
-	"periph.io/x/devices/v3/pca9685"
+	"google.golang.org/grpc"
 )
 
 var wsWriteMu sync.Mutex
@@ -45,8 +47,7 @@ var (
 
 func main() {
 
-	motors, servos, cleanup := SetupRobot()
-	defer cleanup()
+	motors := SetupRobot()
 
 	// CLI flags
 	server := flag.String("server", "wss://noremac.dev/ws/hub", "signaling server URL")
@@ -110,7 +111,7 @@ func main() {
 	// connect and maintain signalling
 	go func() {
 		for {
-			if err := connectAndSignal(api, myID, *room, *server, motors, servos); err != nil {
+			if err := connectAndSignal(api, myID, *room, *server, motors); err != nil {
 				log.Printf("Signal loop exited with: %v; retrying in 1s...", err)
 			}
 			time.Sleep(time.Second)
@@ -192,7 +193,6 @@ func handleSignal(
 	myID, room string,
 	msg map[string]interface{},
 	motors []*Motor,
-	servos *pca9685.ServoGroup,
 ) {
 	typ, _ := msg["type"].(string)
 	from, _ := msg["from"].(string)
@@ -231,7 +231,15 @@ func handleSignal(
 			dc.OnOpen(func() {
 				log.Printf("✔︎ Go DataChannel 'keyboard' open")
 			})
-			dc.OnMessage(Controlls(motors, servos))
+
+			conn, err := grpc.Dial("pi.local:50051", grpc.WithInsecure())
+			if err != nil {
+				log.Fatal(err)
+			}
+			defer conn.Close()
+			servoClient := pb.NewControllerClient(conn)
+
+			dc.OnMessage(Controls(motors, servoClient))
 		}
 	case "offer":
 		log.Printf("Received offer from %s", from)
@@ -479,7 +487,7 @@ func restartICE(pc *webrtc.PeerConnection, ws *websocket.Conn, myID, peerID, roo
 }
 
 // connectAndSignal manages WebSocket signalling (with auto-reconnect)
-func connectAndSignal(api *webrtc.API, myID, room, wsURL string, motors []*Motor, servos *pca9685.ServoGroup) error {
+func connectAndSignal(api *webrtc.API, myID, room, wsURL string, motors []*Motor) error {
 	// dial
 	ws, _, err := websocket.DefaultDialer.Dial(fmt.Sprintf("%s?room=%s", wsURL, room), nil)
 	if err != nil {
@@ -498,7 +506,7 @@ func connectAndSignal(api *webrtc.API, myID, room, wsURL string, motors []*Motor
 		if err := ws.ReadJSON(&msg); err != nil {
 			return err
 		}
-		handleSignal(ws, api, myID, room, msg, motors, servos)
+		handleSignal(ws, api, myID, room, msg, motors)
 	}
 }
 

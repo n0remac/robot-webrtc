@@ -1,0 +1,19 @@
+syntax = "proto3";
+package servo;
+
+// tells protoc where to put the generated Go code
+option go_package = "robot-webrtc/servo;servo";
+
+service Controller {
+  rpc Move(MoveRequest) returns (MoveReply);
+  rpc Stop(StopRequest) returns (StopReply);
+}
+
+message MoveRequest {
+  int32 channel   = 1;
+  int32 direction = 2;  // +1 or -1
+  double speed    = 3;  // degrees/sec
+}
+message MoveReply { bool ok = 1; string err = 2; }
+message StopRequest { int32 channel = 1; }
+message StopReply  { bool ok = 1; string err = 2; }

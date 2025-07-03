@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -9,48 +10,12 @@ import (
 	"strings"
 	"time"
 
+	pb "robot-webrtc/servo"
+
 	"github.com/pion/webrtc/v4"
-	"periph.io/x/conn/v3/i2c/i2creg"
-	"periph.io/x/conn/v3/physic"
-	"periph.io/x/devices/v3/pca9685"
-	"periph.io/x/host/v3"
 )
 
-func SetupRobot() ([]*Motor, *pca9685.ServoGroup, func()) {
-	// 1) Init Periph
-	if _, err := host.Init(); err != nil {
-		log.Fatal("host.Init:", err)
-	}
-
-	// 2) Open I²C bus #1
-	bus, err := i2creg.Open("1")
-	if err != nil {
-		log.Fatal("i2creg.Open:", err)
-	}
-
-	// define a cleanup function that callers must invoke on shutdown
-	cleanup := func() {
-		bus.Close()
-	}
-
-	// 3) Software reset the PCA9685 (General Call 0x06)
-	if err := bus.Tx(0x00, []byte{0x06}, nil); err != nil {
-		log.Println("PCA9685 SWRST failed:", err)
-	}
-	time.Sleep(10 * time.Millisecond)
-
-	// 4) Create & configure the driver
-	pca, err := pca9685.NewI2C(bus, pca9685.I2CAddr)
-	if err != nil {
-		log.Fatal("pca9685.NewI2C:", err)
-	}
-	if err := pca.SetPwmFreq(50 * physic.Hertz); err != nil {
-		log.Fatal("SetPwmFreq:", err)
-	}
-	if err := pca.SetAllPwm(0, 0); err != nil {
-		log.Fatal("SetAllPwm:", err)
-	}
-	servos := pca9685.NewServoGroup(pca, 50, 650, 0, 180)
+func SetupRobot() []*Motor {
 
 	// Create motors (these will use rpio.Pin under the hood)
 	m1 := NewMotor("MOTOR1", 1)
@@ -60,166 +25,147 @@ func SetupRobot() ([]*Motor, *pca9685.ServoGroup, func()) {
 
 	motors := []*Motor{m1, m2, m3, m4}
 
-	return motors, servos, cleanup
+	return motors
 }
 
-func Controlls(motors []*Motor, servos *pca9685.ServoGroup) func(msg webrtc.DataChannelMessage) {
+func Controls(
+	motors []*Motor,
+	servoClient pb.ControllerClient,
+) func(msg webrtc.DataChannelMessage) {
+	const speed = 60 // degrees per second
+
 	return func(msg webrtc.DataChannelMessage) {
-		m1 := motors[0]
-		m2 := motors[1]
-		m3 := motors[2]
-		m4 := motors[3]
-
 		log.Printf("Received message on DataChannel 'keyboard': %s", string(msg.Data))
-
 		type Msg struct {
 			Key    string
 			Action string
 		}
-		var message Msg
-		if err := json.Unmarshal(msg.Data, &message); err != nil {
+		var m Msg
+		if err := json.Unmarshal(msg.Data, &m); err != nil {
 			log.Printf("Error unmarshalling message: %v", err)
 			return
 		}
+		log.Printf("Action=%s, Key=%q", m.Action, m.Key)
 
-		log.Printf("Received action: %s", message.Action)
-		log.Printf("Received key: %s", message.Key)
+		// motors for numeric keys
+		m1, m2, m3, m4 := motors[0], motors[1], motors[2], motors[3]
 
-		const speed = 60 // degrees per second
-
-		// helper to kick off or stop a move
-		act := func(pin, dir int) {
-			if message.Action == "pressed" {
-				if err := Move(servos, pin, dir, speed); err != nil {
-					log.Printf("Move error pin %d: %v", pin, err)
+		// helper to call the servo RPC
+		rpcAct := func(pin, dir int32) {
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+			defer cancel()
+			if m.Action == "pressed" {
+				_, err := servoClient.Move(ctx, &pb.MoveRequest{
+					Channel:   pin,
+					Direction: dir,
+					Speed:     speed,
+				})
+				if err != nil {
+					log.Printf("Servo Move RPC error: %v", err)
 				}
 			} else {
-				Stop(pin)
+				_, err := servoClient.Stop(ctx, &pb.StopRequest{
+					Channel: pin,
+				})
+				if err != nil {
+					log.Printf("Servo Stop RPC error: %v", err)
+				}
 			}
 		}
 
-		switch string(message.Key) {
-		// Claw (pin 4): r=open, f=close
-		case "r":
-			act(4, +1)
-		case "f":
-			act(4, -1)
-
-		// Up/Down (pin 6): t=up, g=down
-		case "t":
-			act(6, +1)
-		case "g":
-			act(6, -1)
-
-		// Left/Right (pin 5): y=right, d=left
-		case "y":
-			act(5, +1)
+		switch m.Key {
+		// Servos:
+		case "r": // claw open
+			rpcAct(4, +1)
+		case "f": // claw close
+			rpcAct(4, -1)
+		case "t": // arm up
+			rpcAct(6, +1)
+		case "g": // arm down
+			rpcAct(6, -1)
+		case "y": // left/right
+			rpcAct(5, +1)
 		case "h":
-			act(5, -1)
-
-		// Camera tilt (pin 14): i=up, k=down
-		case "i":
-			act(14, +1)
+			rpcAct(5, -1)
+		case "i": // camera tilt
+			rpcAct(14, +1)
 		case "k":
-			act(14, -1)
-
-		// Camera pan (pin 15): l=right, j=left
-		case "l":
-			act(15, +1)
+			rpcAct(14, -1)
+		case "l": // camera pan
+			rpcAct(15, +1)
 		case "j":
-			act(15, -1)
+			rpcAct(15, -1)
 
+		// Motors:
 		case "1":
-			if message.Action == "pressed" {
-				log.Println("1 key pressed")
+			if m.Action == "pressed" {
+				log.Println("1 pressed → motor1 forward")
 				m1.Forward(100)
-			} else if message.Action == "released" {
-				log.Println("1 key released")
+			} else {
+				log.Println("1 released → motor1 stop")
 				m1.Stop()
 			}
 		case "2":
-			if message.Action == "pressed" {
-				log.Println("2 key pressed")
+			if m.Action == "pressed" {
 				m2.Forward(100)
-			} else if message.Action == "released" {
-				log.Println("2 key released")
+			} else {
 				m2.Stop()
 			}
 		case "3":
-			if message.Action == "pressed" {
-				log.Println("3 key pressed")
+			if m.Action == "pressed" {
 				m3.Forward(100)
-			} else if message.Action == "released" {
-				log.Println("3 key released")
+			} else {
 				m3.Stop()
 			}
 		case "4":
-			if message.Action == "pressed" {
-				log.Println("4 key pressed")
+			if m.Action == "pressed" {
 				m4.Forward(100)
-			} else if message.Action == "released" {
-				log.Println("4 key released")
+			} else {
 				m4.Stop()
 			}
 		case "w":
-			if message.Action == "pressed" {
-				log.Println("w key pressed")
+			if m.Action == "pressed" {
 				m1.Reverse(100)
 				m3.Forward(100)
-
 				m2.Reverse(100)
 				m4.Forward(100)
-			} else if message.Action == "released" {
-				log.Println("w key released")
+			} else {
 				m1.Stop()
 				m3.Stop()
 				m2.Stop()
 				m4.Stop()
 			}
 		case "s":
-			log.Println("Backward command received")
-			if message.Action == "pressed" {
-				log.Println("s key pressed")
+			if m.Action == "pressed" {
 				m1.Forward(100)
 				m3.Reverse(100)
-
 				m2.Forward(100)
 				m4.Reverse(100)
-			} else if message.Action == "released" {
-				log.Println("s key released")
+			} else {
 				m1.Stop()
 				m3.Stop()
 				m2.Stop()
 				m4.Stop()
 			}
 		case "a":
-			log.Println("a key pressed")
-			if message.Action == "pressed" {
-				log.Println("a key pressed")
+			if m.Action == "pressed" {
 				m1.Forward(100)
 				m3.Reverse(100)
-
 				m2.Reverse(100)
 				m4.Forward(100)
-			} else if message.Action == "released" {
-				log.Println("a key released")
+			} else {
 				m1.Stop()
 				m3.Stop()
 				m2.Stop()
 				m4.Stop()
 			}
 		case "d":
-			log.Println("d key pressed")
-			if message.Action == "pressed" {
-				log.Println("d key pressed")
+			if m.Action == "pressed" {
 				m1.Reverse(100)
 				m3.Forward(100)
-
 				m2.Forward(100)
 				m4.Reverse(100)
-
-			} else if message.Action == "released" {
-				log.Println("d key released")
+			} else {
 				m1.Stop()
 				m3.Stop()
 				m2.Stop()
