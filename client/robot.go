@@ -85,21 +85,21 @@ func Controls(
 		case "f": // claw close
 			rpcAct(4, -1)
 		case "t": // arm up
-			rpcAct(6, +1)
-		case "g": // arm down
 			rpcAct(6, -1)
+		case "g": // arm down
+			rpcAct(6, +1)
 		case "y": // left/right
 			rpcAct(5, +1)
 		case "h":
 			rpcAct(5, -1)
 		case "i": // camera tilt
-			rpcAct(14, +1)
+			rpcAct(12, +1)
 		case "k":
-			rpcAct(14, -1)
+			rpcAct(12, -1)
 		case "l": // camera pan
-			rpcAct(15, +1)
+			rpcAct(13, -1)
 		case "j":
-			rpcAct(15, -1)
+			rpcAct(13, +1)
 
 		// Motors:
 		case "1":
