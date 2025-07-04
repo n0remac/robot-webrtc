@@ -105,12 +105,13 @@ async function joinSession() {
     showLocalVideo();
     await connectWebSocket();
 
-    // bind all five keys
+    // bind keys
     ;[
       'w','a','s','d', 
       '1', '2', '3', '4',
       't', 'f', 'g', 'h',
       'i', 'j', 'k', 'l',
+      'r', 'y',
     ].forEach(k =>
       createKeyPressEventListener(k, (action, e) => {
       })
