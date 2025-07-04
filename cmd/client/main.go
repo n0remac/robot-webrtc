@@ -12,12 +12,21 @@ import (
 	"time"
 
 	"github.com/pion/webrtc/v4"
+	"google.golang.org/grpc"
 
 	cl "github.com/n0remac/robot-webrtc/client"
+	sv "github.com/n0remac/robot-webrtc/servo"
 )
 
 func main() {
-	
+
+	conn, err := grpc.Dial("pi.local:50051", grpc.WithInsecure())
+	if err != nil {
+		log.Fatalf("failed to dial servo server: %v", err)
+	}
+	defer conn.Close()
+	servoClient := sv.NewControllerClient(conn)
+
 	motors := cl.SetupRobot()
 
 	// CLI flags
@@ -82,7 +91,7 @@ func main() {
 	// connect and maintain signalling
 	go func() {
 		for {
-			if err := cl.ConnectAndSignal(api, myID, *room, *server, motors); err != nil {
+			if err := cl.ConnectAndSignal(api, myID, *room, *server, motors, servoClient); err != nil {
 				log.Printf("Signal loop exited with: %v; retrying in 1s...", err)
 			}
 			time.Sleep(time.Second)

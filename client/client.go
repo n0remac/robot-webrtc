@@ -90,6 +90,7 @@ func handleSignal(
 	myID, room string,
 	msg map[string]interface{},
 	motors []*Motor,
+	servoClient pb.ControllerClient,
 ) {
 	typ, _ := msg["type"].(string)
 	from, _ := msg["from"].(string)
@@ -128,13 +129,6 @@ func handleSignal(
 			dc.OnOpen(func() {
 				log.Printf("✔︎ Go DataChannel 'keyboard' open")
 			})
-
-			conn, err := grpc.Dial("pi.local:50051", grpc.WithInsecure())
-			if err != nil {
-				log.Fatal(err)
-			}
-			defer conn.Close()
-			servoClient := pb.NewControllerClient(conn)
 
 			dc.OnMessage(Controls(motors, servoClient))
 		}
@@ -384,7 +378,7 @@ func restartICE(pc *webrtc.PeerConnection, ws *websocket.Conn, myID, peerID, roo
 }
 
 // connectAndSignal manages WebSocket signalling (with auto-reconnect)
-func ConnectAndSignal(api *webrtc.API, myID, room, wsURL string, motors []*Motor) error {
+func ConnectAndSignal(api *webrtc.API, myID, room, wsURL string, motors []*Motor, servoClient pb.ControllerClient) error {
 	// dial
 	ws, _, err := websocket.DefaultDialer.Dial(fmt.Sprintf("%s?room=%s", wsURL, room), nil)
 	if err != nil {
@@ -403,7 +397,7 @@ func ConnectAndSignal(api *webrtc.API, myID, room, wsURL string, motors []*Motor
 		if err := ws.ReadJSON(&msg); err != nil {
 			return err
 		}
-		handleSignal(ws, api, myID, room, msg, motors)
+		handleSignal(ws, api, myID, room, msg, motors, servoClient)
 	}
 }
 
