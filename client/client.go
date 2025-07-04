@@ -15,7 +15,6 @@ import (
 	"github.com/gorilla/websocket"
 	"github.com/pion/rtp"
 	"github.com/pion/webrtc/v4"
-	"google.golang.org/grpc"
 )
 
 var wsWriteMu sync.Mutex
