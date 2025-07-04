@@ -11,11 +11,16 @@ import (
 	"time"
 
 	pb "github.com/n0remac/robot-webrtc/servo"
+	"github.com/stianeikeland/go-rpio/v4"
 
 	"github.com/pion/webrtc/v4"
 )
 
 func SetupRobot() []*Motor {
+	// 0) Open the rpio driver — must do this *once* before any Pin.Output/Pin.Input calls
+	if err := rpio.Open(); err != nil {
+		log.Fatalf("rpio.Open failed: %v", err)
+	}
 
 	// Create motors (these will use rpio.Pin under the hood)
 	m1 := NewMotor("MOTOR1", 1)
