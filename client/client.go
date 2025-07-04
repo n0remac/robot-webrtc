@@ -88,7 +88,7 @@ func handleSignal(
 	api *webrtc.API,
 	myID, room string,
 	msg map[string]interface{},
-	motors []*Motor,
+	motors []Motorer,
 	servoClient pb.ControllerClient,
 ) {
 	typ, _ := msg["type"].(string)
@@ -377,7 +377,7 @@ func restartICE(pc *webrtc.PeerConnection, ws *websocket.Conn, myID, peerID, roo
 }
 
 // connectAndSignal manages WebSocket signalling (with auto-reconnect)
-func ConnectAndSignal(api *webrtc.API, myID, room, wsURL string, motors []*Motor, servoClient pb.ControllerClient) error {
+func ConnectAndSignal(api *webrtc.API, myID, room, wsURL string, motors []Motorer, servoClient pb.ControllerClient) error {
 	// dial
 	ws, _, err := websocket.DefaultDialer.Dial(fmt.Sprintf("%s?room=%s", wsURL, room), nil)
 	if err != nil {

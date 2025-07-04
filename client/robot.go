@@ -16,10 +16,25 @@ import (
 	"github.com/pion/webrtc/v4"
 )
 
-func SetupRobot() []*Motor {
+type Motorer interface {
+	Forward(speed float64)
+	Reverse(speed float64)
+	Stop()
+	Test(bool)
+}
+
+type NopMotor struct{}
+
+func (NopMotor) Forward(float64) {}
+func (NopMotor) Reverse(float64) {}
+func (NopMotor) Stop()           {}
+func (NopMotor) Test(bool)       {}
+
+func SetupRobot() []Motorer {
 	// 0) Open the rpio driver — must do this *once* before any Pin.Output/Pin.Input calls
 	if err := rpio.Open(); err != nil {
-		log.Fatalf("rpio.Open failed: %v", err)
+		log.Printf("⚠️  rpio.Open failed (%v); falling back to no-op motors", err)
+		return []Motorer{NopMotor{}, NopMotor{}, NopMotor{}, NopMotor{}}
 	}
 
 	// Create motors (these will use rpio.Pin under the hood)
@@ -28,13 +43,11 @@ func SetupRobot() []*Motor {
 	m3 := NewMotor("MOTOR3", 1)
 	m4 := NewMotor("MOTOR4", 1)
 
-	motors := []*Motor{m1, m2, m3, m4}
-
-	return motors
+	return []Motorer{m1, m2, m3, m4}
 }
 
 func Controls(
-	motors []*Motor,
+	motors []Motorer,
 	servoClient pb.ControllerClient,
 ) func(msg webrtc.DataChannelMessage) {
 	const speed = 60 // degrees per second
