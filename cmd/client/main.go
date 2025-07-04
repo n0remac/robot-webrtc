@@ -2,6 +2,7 @@
 package main
 
 import (
+	"context"
 	"flag"
 	"fmt"
 	"log"
@@ -82,9 +83,10 @@ func main() {
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
 
 	// connect to servo server
+	target := "127.0.0.1:50051"
 	conn, err := grpc.NewClient(
-		"pi.local:50051",
-		grpc.WithTransportCredentials(insecure.NewCredentials()), // instead of WithInsecure :contentReference[oaicite:1]{index=1}
+		target,
+		grpc.WithTransportCredentials(insecure.NewCredentials()),
 	)
 	defer conn.Close()
 
