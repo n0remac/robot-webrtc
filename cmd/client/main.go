@@ -13,7 +13,7 @@ import (
 
 	"github.com/pion/webrtc/v4"
 
-	cl "robot-webrtc/client"
+	cl "github.com/n0remac/robot-webrtc/client"
 )
 
 func main() {

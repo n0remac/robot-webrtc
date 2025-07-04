@@ -10,7 +10,7 @@ import (
 	"sync"
 	"time"
 
-	pb "robot-webrtc/servo"
+	pb "github.com/n0remac/robot-webrtc/servo"
 
 	"github.com/gorilla/websocket"
 	"github.com/pion/rtp"

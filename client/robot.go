@@ -10,7 +10,7 @@ import (
 	"strings"
 	"time"
 
-	pb "robot-webrtc/servo"
+	pb "github.com/n0remac/robot-webrtc/servo"
 
 	"github.com/pion/webrtc/v4"
 )

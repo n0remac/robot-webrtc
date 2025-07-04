@@ -1,4 +1,4 @@
-module robot-webrtc
+module github.com/n0remac/robot-webrtc
 
 go 1.24.0
 

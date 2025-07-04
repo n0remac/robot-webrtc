@@ -1,7 +1,7 @@
 package deps
 
 import (
-	"robot-webrtc/db"
+	"github.com/n0remac/robot-webrtc/db"
 
 	"gorm.io/gorm"
 )
