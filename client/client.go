@@ -174,7 +174,6 @@ func handleSignal(
 
 		// 5) send it
 		wsWriteMu.Lock()
-		defer wsWriteMu.Unlock()
 		ws.WriteJSON(map[string]interface{}{
 			"type":   "answer",
 			"answer": pc.LocalDescription(),
@@ -183,6 +182,7 @@ func handleSignal(
 			"room":   room,
 			"name":   "robot",
 		})
+		wsWriteMu.Unlock()
 
 	case "answer":
 		log.Printf("Received answer from %s", from)
@@ -298,7 +298,6 @@ func createPeerConnection(
 			return
 		}
 		wsWriteMu.Lock()
-		defer wsWriteMu.Unlock()
 		ws.WriteJSON(map[string]interface{}{
 			"type":  "offer",
 			"offer": pc.LocalDescription(),
@@ -307,6 +306,7 @@ func createPeerConnection(
 			"room":  room,
 			"name":  "robot",
 		})
+		wsWriteMu.Unlock()
 
 		// clear the flag once sent
 		makingOfferMu.Lock()
@@ -320,7 +320,6 @@ func createPeerConnection(
 			return
 		}
 		wsWriteMu.Lock()
-		defer wsWriteMu.Unlock()
 		ws.WriteJSON(map[string]interface{}{
 			"type":      "candidate",
 			"candidate": c.ToJSON(),
@@ -329,6 +328,7 @@ func createPeerConnection(
 			"room":      room,
 			"name":      "robot",
 		})
+		wsWriteMu.Unlock()
 	})
 	pc.OnICEConnectionStateChange(func(s webrtc.ICEConnectionState) {
 		if s == webrtc.ICEConnectionStateFailed {
@@ -363,7 +363,6 @@ func restartICE(pc *webrtc.PeerConnection, ws *websocket.Conn, myID, peerID, roo
 		return
 	}
 	wsWriteMu.Lock()
-	defer wsWriteMu.Unlock()
 	ws.WriteJSON(map[string]interface{}{
 		"type":  "offer",
 		"offer": pc.LocalDescription(),
@@ -372,6 +371,7 @@ func restartICE(pc *webrtc.PeerConnection, ws *websocket.Conn, myID, peerID, roo
 		"room":  room,
 		"name":  "robot",
 	})
+	wsWriteMu.Unlock()
 	log.Printf("▶ ICE-restart sent to %s", peerID)
 	makingOffer[peerID] = false
 }
@@ -387,9 +387,8 @@ func ConnectAndSignal(api *webrtc.API, myID, room, wsURL string, motors []*Motor
 
 	// send join
 	wsWriteMu.Lock()
-	defer wsWriteMu.Unlock()
 	ws.WriteJSON(map[string]interface{}{"type": "join", "join": myID, "from": myID, "room": room, "name": "robot"})
-
+	wsWriteMu.Unlock()
 	// read loop
 	for {
 		var msg map[string]interface{}
