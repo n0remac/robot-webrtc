@@ -90,29 +90,29 @@ func Controls(
 				}
 			}
 		}
-
+		// 4 open claw, 5 turn claw , 6 lift claw, 14, pan camera, 15 tilt camera
 		switch m.Key {
 		// Servos:
 		case "r": // claw open
 			rpcAct(4, +1)
-		case "f": // claw close
+		case "y": // claw close
 			rpcAct(4, -1)
 		case "t": // arm up
 			rpcAct(6, -1)
 		case "g": // arm down
 			rpcAct(6, +1)
-		case "y": // left/right
+		case "f": // left/right
 			rpcAct(5, +1)
 		case "h":
 			rpcAct(5, -1)
 		case "i": // camera tilt
-			rpcAct(12, +1)
+			rpcAct(15, +1)
 		case "k":
-			rpcAct(12, -1)
+			rpcAct(15, -1)
 		case "l": // camera pan
-			rpcAct(13, -1)
+			rpcAct(14, -1)
 		case "j":
-			rpcAct(13, +1)
+			rpcAct(14, +1)
 
 		// Motors:
 		case "1":
