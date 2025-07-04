@@ -13,20 +13,13 @@ import (
 
 	"github.com/pion/webrtc/v4"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials/insecure"
 
 	cl "github.com/n0remac/robot-webrtc/client"
 	sv "github.com/n0remac/robot-webrtc/servo"
 )
 
 func main() {
-
-	conn, err := grpc.Dial("pi.local:50051", grpc.WithInsecure())
-	if err != nil {
-		log.Fatalf("failed to dial servo server: %v", err)
-	}
-	defer conn.Close()
-	servoClient := sv.NewControllerClient(conn)
-
 	motors := cl.SetupRobot()
 
 	// CLI flags
@@ -88,7 +81,21 @@ func main() {
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
 
-	// connect and maintain signalling
+	// connect to servo server
+	conn, err := grpc.NewClient(
+		"pi.local:50051",
+		grpc.WithTransportCredentials(insecure.NewCredentials()), // instead of WithInsecure :contentReference[oaicite:1]{index=1}
+	)
+	defer conn.Close()
+
+	if err != nil {
+		log.Fatalf("failed to dial servo server: %v", err)
+	}
+	defer conn.Close()
+
+	servoClient := sv.NewControllerClient(conn)
+
+	// connect and maintain webRTC signalling
 	go func() {
 		for {
 			if err := cl.ConnectAndSignal(api, myID, *room, *server, motors, servoClient); err != nil {
