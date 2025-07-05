@@ -367,29 +367,3 @@ func (s *Sensor) Trigger() {
 	fmt.Println("Trigger Called; Triggered =", s.Triggered)
 }
 
-// --- main usage example --------------------------------------------------
-
-// func main() {
-// 	// open /dev/gpiomem
-// 	if err := rpio.Open(); err != nil {
-// 		fmt.Println("Unable to open GPIO:", err)
-// 		return
-// 	}
-// 	defer rpio.Close()
-
-// 	m1 := NewMotor("MOTOR1", 1)
-// 	m2 := NewMotor("MOTOR2", 1)
-// 	m3 := NewMotor("MOTOR3", 1)
-// 	m4 := NewMotor("MOTOR4", 1)
-
-// 	m1.Reverse(100)
-// 	m2.Forward(100)
-// 	m3.Forward(100)
-// 	m4.Forward(100)
-// 	time.Sleep(3 * time.Second)
-// 	m1.Stop()
-// 	m2.Stop()
-// 	m3.Stop()
-// 	m4.Stop()
-
-// }

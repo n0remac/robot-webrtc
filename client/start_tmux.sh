@@ -1,28 +1,40 @@
 #!/usr/bin/env bash
 #
 # start_tmux.sh — create a detached 'boot' tmux session,
-# cd into robot-webrtc, git pull, then go run .
+# cd into robot-webrtc, git pull, then start servo and client.
 #
 
 # session name
 SESSION="boot"
-# project directory
-PROJ_DIR="$HOME/robot-webrtc/client"
+# project root directory
+PROJ_ROOT="$HOME/robot-webrtc"
 
-# ensure TMUX socket dir is correct
-export HOME="$HOME"
-
-# If the session already exists, do nothing
+# If the session already exists, exit
 tmux has-session -t "$SESSION" 2>/dev/null && exit 0
 
-# create a new detached session, with one window named 'robot-webrtc'
+# Create a new detached session, first window for servo server
 tmux new-session -d \
   -s "$SESSION" \
-  -n robot-webrtc \
-  -c "$PROJ_DIR"
+  -n servo \
+  -c "$PROJ_ROOT"
 
-# run your commands in that window
-tmux send-keys -t "${SESSION}:robot-webrtc" "ssh -Nf -R 2222:localhost:22 streaming@146.190.175.159" C-m
-tmux send-keys -t "${SESSION}:robot-webrtc" "git pull" C-m
-tmux send-keys -t "${SESSION}:robot-webrtc" "pkill ffmpeg" C-m
-tmux send-keys -t "${SESSION}:robot-webrtc" "go run ." C-m
+# In the 'servo' window:
+# 1) open reverse SSH tunnel
+# 2) pull latest code
+# 3) kill any lingering ffmpeg processes
+# 4) run the servo gRPC server
+tmux send-keys -t "$SESSION:servo" "ssh -Nf -R 2222:localhost:22 streaming@146.190.175.159" C-m
+tmux send-keys -t "$SESSION:servo" "git pull" C-m
+tmux send-keys -t "$SESSION:servo" "pkill ffmpeg || true" C-m
+tmux send-keys -t "$SESSION:servo" "go run ./cmd/servo/" C-m
+
+# Create a second window for the client
+tmux new-window -t "$SESSION" \
+  -n client \
+  -c "$PROJ_ROOT"
+
+# In the 'client' window:
+# run the WebRTC client
+tmux send-keys -t "$SESSION:client" "go run ./cmd/client/" C-m
+
+echo "🚀 tmux session '$SESSION' created with windows: servo, client."
