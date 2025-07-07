@@ -221,6 +221,8 @@ func handleSignal(
 		return pc
 	}
 
+	fmt.Println("Handling signal type:", typ)
+
 	switch typ {
 	case "join":
 		log.Printf("Peer %s joined → creating PC + DC offer", from)
@@ -394,6 +396,12 @@ func createPeerConnection(
 
 	pc.OnNegotiationNeeded(func() {
 		fmt.Println("OnNegotiationNeeded for", peerID)
+
+		if pc.SignalingState() != webrtc.SignalingStateStable {
+			log.Printf("ICE-restart: PC not stable for %s, skipping restart", peerID)
+			return
+		}
+
 		makingOfferMu.Lock()
 		makingOffer[peerID] = true
 		makingOfferMu.Unlock()
@@ -467,6 +475,12 @@ func ptrUint16(u uint16) *uint16 { return &u }
 
 func restartICE(pc *webrtc.PeerConnection, ws *websocket.Conn, myID, peerID, room string) {
 	fmt.Println("Restarting ICE for", peerID)
+
+	if pc.SignalingState() != webrtc.SignalingStateStable {
+		log.Printf("ICE-restart: PC not stable for %s, skipping restart", peerID)
+		return
+	}
+
 	makingOffer[peerID] = true
 	offer, err := pc.CreateOffer(&webrtc.OfferOptions{ICERestart: true})
 	if err != nil {
