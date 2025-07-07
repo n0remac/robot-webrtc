@@ -449,7 +449,7 @@ func createPeerConnection(
 			restartICE(pc, ws, myID, peerID, room)
 		}
 	})
-	
+
 	// add tracks _after_ OnNegotiationNeeded is set
 	if _, err := pc.AddTrack(VideoTrack); err != nil {
 		log.Fatalf("AddTrack video: %v", err)
@@ -493,7 +493,7 @@ func restartICE(pc *webrtc.PeerConnection, ws *websocket.Conn, myID, peerID, roo
 // connectAndSignal manages WebSocket signalling (with auto-reconnect)
 func ConnectAndSignal(api *webrtc.API, myID, room, wsURL string, motors []Motorer, servoClient sv.ControllerClient) error {
 	// dial
-	ws, _, err := websocket.DefaultDialer.Dial(fmt.Sprintf("%s?room=%s", wsURL, room), nil)
+	ws, _, err := websocket.DefaultDialer.Dial(fmt.Sprintf("%s?room=%s&playerId=robot", wsURL, room), nil)
 	if err != nil {
 		return err
 	}
