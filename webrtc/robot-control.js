@@ -50,16 +50,17 @@ async function connectWebSocket() {
     };
   
     ws.onmessage = ({ data }) => {
-    const msg = JSON.parse(data);
+      console.log("WS message:", msg);
+      const msg = JSON.parse(data);
 
-    // Only handle messages *from* the robot
-    if (msg.from !== ROBOT_ID) return;
+      // Only handle messages *from* the robot
+      if (msg.from !== ROBOT_ID) return;
 
-    if (!pc) {
-        pc = createPeerConnection(ROBOT_ID);
-    }
-    pc.handleSignal(msg);
-};
+      if (!pc) {
+          pc = createPeerConnection(ROBOT_ID);
+      }
+      pc.handleSignal(msg);
+  };
   
     ws.onerror = e => Logger.error('WebSocket error', e);
     ws.onclose = (e) => {
@@ -172,6 +173,8 @@ function createPeerConnection(peerId) {
     
             const answer = await pc.createAnswer();
             await pc.setLocalDescription(answer);
+            
+            console.log("Received offer from robot, sending answer…");
             ws.send(JSON.stringify({
               type:   'answer',
               answer: pc.localDescription,
