@@ -424,6 +424,7 @@ func createPeerConnection(
 		makingOfferMu.Lock()
 		makingOffer[peerID] = false
 		makingOfferMu.Unlock()
+		fmt.Println("▶ Offer sent to", peerID)
 	})
 
 	// register ICE-candidate and connection handlers
