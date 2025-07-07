@@ -43,26 +43,7 @@ func VideoHandler(mux *http.ServeMux, registry *CommandRegistry) {
 	registerSignallingCommands(registry)
 
 	// WebSocket endpoints
-	mux.HandleFunc("/ws/hub", func(w http.ResponseWriter, r *http.Request) {
-		conn, err := Upgrader.Upgrade(w, r, nil)
-		if err != nil {
-			log.Printf("WS upgrade /ws/hub → %v", err)
-			return
-		}
-		room := r.URL.Query().Get("room")
-		if room == "" {
-			room = "default"
-		}
-		client := &WebsocketClient{
-			Conn:     conn,
-			Send:     make(chan []byte, 256),
-			Registry: registry,
-			Room:     room,
-		}
-		WsHub.Register <- client
-		go client.WritePump()
-		client.ReadPump()
-	})
+	mux.HandleFunc("/ws/hub", CreateWebsocket(registry))
 }
 
 // registerSignallingCommands wires WebRTC commands into the Hub
