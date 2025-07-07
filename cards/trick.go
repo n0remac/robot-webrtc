@@ -14,7 +14,7 @@
 // rendered sheet occupies exactly one landscape Letter page. If you are on
 // A4, change the @page size to 297mm 210mm and keep everything else.
 
-package main
+package cards
 
 import (
 	"net/http"

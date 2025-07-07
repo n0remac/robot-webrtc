@@ -1,4 +1,4 @@
-package main
+package cards
 
 import (
 	"fmt"
@@ -433,7 +433,7 @@ func gameScreen(game *Game, playerId string) *Node {
 
 	return DefaultLayout(
 		Div(
-			Script(Raw(LoadFile("cards.js"))),
+			Script(Raw(LoadFile("cards/cards.js"))),
 			Id("lobby"),
 			Div(
 				Div(Class("flex flex-col h-screen"),

@@ -1,62 +1,6 @@
 const domainName = window.location.hostname === "localhost" ? "localhost:8080" : "noremac.dev";
 const wsProtocol = window.location.protocol === "https:" ? "wss" : "ws";
 const ROOM = new URLSearchParams(location.search).get("room") || "default";
-const dataChannels = {};
-
-
-const Logger = (() => {
-    let enabled = false;              // controlled by server
-    let wsLog   = null;               // second websocket for log shipping
-    let seq     = 0;                  // monotonic counter
-    let backlog = [];
-
-    function setDebug(value) { enabled = value; }
-
-    function attachSocket(url) {
-        wsLog = new WebSocket(url);
-        wsLog.onerror = e => console.warn('[log‑socket] error', e);
-
-        /* flush once open */
-        wsLog.onopen = () => {
-            enabled = true;
-            backlog.forEach(e => wsLog.send(JSON.stringify(e)));
-            backlog = [];
-        };
-    }
-
-    /** core log fn: level, msg, ...meta */
-    function log(level, msg, ...meta) {
-        if (!enabled) return;
-
-        const entry = {
-            t: performance.now().toFixed(1),   // high‑res timestamp
-            s: ++seq,                          // sequence number
-            lvl: level,
-            msg,
-            meta,
-        };
-
-        // 1) Browser console (colour by level)
-        const colour = {INFO:'', WARN:'orange', ERR:'red'}[level] ?? '';
-        console.log(`%c${entry.t}ms #${entry.s} ${level}: ${msg}`,
-                    `color:${colour}`, ...meta);
-
-        // 2) Backend (fire‑and‑forget)
-        if (wsLog?.readyState === WebSocket.OPEN){
-            wsLog.send(JSON.stringify(entry));
-        } else {
-            backlog.push(entry);
-        }
-    }
-
-    return {
-        setDebug,
-        attachSocket,
-        info : (...a)=>log('INFO', ...a),
-        warn : (...a)=>log('WARN', ...a),
-        error: (...a)=>log('ERR' , ...a),
-    };
-    })();
 
 Logger.attachSocket(`${wsProtocol}://${domainName}/ws/logs`);
 document.addEventListener("DOMContentLoaded", () => {
@@ -76,7 +20,7 @@ let isVideoStopped = false;
 let ws;
 let globalIceServers = [];
 const peerNames = {};
-
+const dataChannels = {};
 const peers = {};
 
 window.addEventListener('beforeunload', () => {
@@ -105,18 +49,6 @@ async function joinSession() {
     await setupLocalMedia();
     showLocalVideo();
     await connectWebSocket();
-
-    // bind keys
-    ;[
-      'w','a','s','d', 
-      '1', '2', '3', '4',
-      't', 'f', 'g', 'h',
-      'i', 'j', 'k', 'l',
-      'r', 'y',
-    ].forEach(k =>
-      createKeyPressEventListener(k, (action, e) => {
-      })
-    );
 }
 
 async function fetchTurnCredentials() {
@@ -446,86 +378,9 @@ function createPeerConnection(peerId) {
   return pc;
 }
 
-
-function createKeyPressEventListener(key, callback) {
-  const normalized = key.toLowerCase();
-
-  function handler(e) {
-    if (e.key && e.key.toLowerCase() === normalized) {
-      e.preventDefault();
-      e.stopImmediatePropagation();
-
-      const action = e.type === 'keydown' ? 'pressed' : 'released';
-      console.log(`Key ${normalized} ${action}`);
-      callback(action, normalized);
-
-      // broadcast to each peer
-      Object.values(dataChannels).forEach(dc => {
-        if (dc.readyState === 'open') {
-          console.log(`Sending ${action} event to ${dc.label}`);
-          dc.send(JSON.stringify({ key: normalized, action }));
-        }
-      });
-    }
-  }
-
-  window.addEventListener('keydown', handler, true);
-  window.addEventListener('keyup',   handler, true);
-}
-
-function toggleNoise() {
-    localStream.getAudioTracks().forEach(track => track.enabled = !track.enabled);
-    track.applyConstraints({
-      echoCancellation: true,
-      noiseSuppression: true,
-      autoGainControl: true
-    });
-}
-
-function toggleMute() {
-    localStream.getAudioTracks().forEach(track => track.enabled = !track.enabled);
-    isMuted = !isMuted;
-    document.getElementById('mute-btn').textContent = isMuted ? 'Unmute' : 'Mute';
-    Logger.info('ui:mute‑toggle', {muted: isMuted});
-}
-
-function toggleVideo() {
-    localStream.getVideoTracks().forEach(track => track.enabled = !track.enabled);
-    isVideoStopped = !isVideoStopped;
-    document.getElementById('video-btn').textContent = isVideoStopped ? 'Start Video' : 'Stop Video';
-    Logger.info('ui:video‑toggle', {stopped: isVideoStopped});
-}
-
 function generateUUID() {
     return 'xxxx-xxxx-4xxx-yxxx-xxxxxx'.replace(/[xy]/g, function(c) {
         const r = Math.random() * 16 | 0, v = c === 'x' ? r : (r & 0x3 | 0x8);
         return v.toString(16);
     });
-}
-
-let previewStream;
-async function testCamera() {
-  try {
-    previewStream = await navigator.mediaDevices.getUserMedia({ video: true });
-    const preview = document.getElementById('preview-video');
-    preview.srcObject = previewStream;
-    preview.style.display = 'block';
-    Logger.info('Camera test passed');
-  } catch (err) {
-    alert('Camera access failed: ' + err.message);
-    Logger.error('Camera test failed', err);
-  }
-}
-
-let micStream;
-async function testMic() {
-  try {
-    micStream = await navigator.mediaDevices.getUserMedia({ audio: true });
-    document.getElementById('mic-status').textContent = '🎤 Microphone is working';
-    // optional: hook into Web Audio API to display levels…
-    Logger.info('Mic test passed');
-  } catch (err) {
-    document.getElementById('mic-status').textContent = '❌ Mic access denied';
-    Logger.error('Mic test failed', err);
-  }
 }

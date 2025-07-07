@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/gorilla/websocket"
+	. "github.com/n0remac/robot-webrtc/cards"
 	. "github.com/n0remac/robot-webrtc/webrtc"
 	. "github.com/n0remac/robot-webrtc/websocket"
 )

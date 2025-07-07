@@ -37,6 +37,7 @@ func VideoHandler(mux *http.ServeMux, registry *CommandRegistry) {
 	// Page and TURN credentials
 	mux.HandleFunc("/video/", VideoPage)
 	mux.HandleFunc("/turn-credentials", handleTurnCredentials)
+	mux.HandleFunc("/robot/", RobotControlHandler)
 
 	// Register signalling commands
 	registerSignallingCommands(registry)
@@ -70,7 +71,7 @@ func registerSignallingCommands(reg *CommandRegistry) {
 	reg.RegisterWebsocket("join", func(_ string, hub *Hub, data map[string]interface{}) {
 		room := getRoom(data)
 		from := data["from"].(string)
-		broadcastWebRTC(hub, room, Message{Type: "join", From: from})
+		broadcastWebRTC(room, Message{Type: "join", From: from})
 	})
 
 	// "offer": forward an SDP offer
@@ -78,7 +79,7 @@ func registerSignallingCommands(reg *CommandRegistry) {
 		room := getRoom(data)
 		from := data["from"].(string)
 		to := data["to"].(string)
-		broadcastWebRTC(hub, room, Message{
+		broadcastWebRTC(room, Message{
 			Type:  "offer",
 			From:  from,
 			To:    to,
@@ -92,7 +93,7 @@ func registerSignallingCommands(reg *CommandRegistry) {
 		room := getRoom(data)
 		from := data["from"].(string)
 		to := data["to"].(string)
-		broadcastWebRTC(hub, room, Message{
+		broadcastWebRTC(room, Message{
 			Type:   "answer",
 			From:   from,
 			To:     to,
@@ -106,7 +107,7 @@ func registerSignallingCommands(reg *CommandRegistry) {
 		room := getRoom(data)
 		from := data["from"].(string)
 		to := data["to"].(string)
-		broadcastWebRTC(hub, room, Message{
+		broadcastWebRTC(room, Message{
 			Type:      "candidate",
 			From:      from,
 			To:        to,
@@ -118,7 +119,7 @@ func registerSignallingCommands(reg *CommandRegistry) {
 	reg.RegisterWebsocket("leave", func(_ string, hub *Hub, data map[string]interface{}) {
 		room := getRoom(data)
 		from := data["from"].(string)
-		broadcastWebRTC(hub, room, Message{Type: "leave", From: from})
+		broadcastWebRTC(room, Message{Type: "leave", From: from})
 	})
 }
 
@@ -131,13 +132,17 @@ func getRoom(data map[string]interface{}) string {
 }
 
 // broadcastWebRTC marshals and broadcasts a signalling message into the Hub
-func broadcastWebRTC(hub *Hub, room string, msg Message) {
+func broadcastWebRTC(room string, msg Message) {
 	raw, err := json.Marshal(msg)
 	if err != nil {
 		log.Println("⚠️  marshal error:", err)
 		return
 	}
-	WsHub.Broadcast <- WebsocketMessage{Room: room, Content: raw}
+	if msg.To != "" {
+		WsHub.Broadcast <- WebsocketMessage{Room: room, Content: raw, Id: msg.To}
+	} else {
+		WsHub.Broadcast <- WebsocketMessage{Room: room, Content: raw}
+	}
 }
 
 // VideoPage renders the HTML layout for the video client
@@ -150,7 +155,9 @@ func VideoPage(w http.ResponseWriter, r *http.Request) {
 
 	page := DefaultLayout(
 		Style(Raw(LoadFile("webrtc/video.css"))),
+		Script(Raw(LoadFile("webrtc/logger.js"))),
 		Script(Raw(LoadFile("webrtc/video.js"))),
+		Script(Raw(LoadFile("webrtc/media-controls.js"))),
 		Attr("hx-ext", "ws"),
 		Attr("ws-connect", "/ws/hub?room="+room),
 		Div(Attrs(map[string]string{
@@ -158,7 +165,8 @@ func VideoPage(w http.ResponseWriter, r *http.Request) {
 			"data-theme": "dark",
 		}),
 			// Join screen with room selector and device tests
-			Div(Id("join-screen"), Class("mt-24 flex flex-col items-center space-y-4"),
+			Div(
+				Id("join-screen"), Class("mt-24 flex flex-col items-center space-y-4"),
 				Input(Attrs(map[string]string{
 					"type":        "text",
 					"id":          "name",
@@ -183,7 +191,6 @@ func VideoPage(w http.ResponseWriter, r *http.Request) {
 				// Join button
 				Button(Id("join-btn"), Class("btn mt-2 w-32"), T("Join")),
 			),
-
 			// Participant view remains unchanged
 			Div(Id("participant-view"), Attr("style", "display:none;"), Class("mt-6"),
 				Div(Id("videos"), Class("relative grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4 w-full h-full p-4")),

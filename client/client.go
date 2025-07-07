@@ -7,10 +7,16 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"os"
+	"os/signal"
+	"strings"
 	"sync"
+	"syscall"
 	"time"
 
-	pb "github.com/n0remac/robot-webrtc/servo"
+	sv "github.com/n0remac/robot-webrtc/servo"
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials/insecure"
 
 	"github.com/gorilla/websocket"
 	"github.com/pion/rtp"
@@ -38,6 +44,102 @@ var (
 	VideoTrack       *webrtc.TrackLocalStaticRTP
 	AudioTrack       *webrtc.TrackLocalStaticRTP
 )
+
+func Setup(server *string, room *string, motors []Motorer, myID string) {
+	// fetch TURN credentials and build ICE servers
+	serverBase := strings.TrimSuffix(strings.TrimPrefix(*server, "wss://"), "/ws/hub")
+	creds, err := FetchTurnCredentials("https://" + serverBase + "/turn-credentials")
+	if err != nil {
+		log.Printf("Warning: could not fetch TURN creds: %v", err)
+	}
+	GlobalIceServers = []webrtc.ICEServer{{URLs: []string{"stun:stun.l.google.com:19302"}}}
+	if creds != nil {
+		for _, uri := range creds.URLs {
+			GlobalIceServers = append(GlobalIceServers,
+				webrtc.ICEServer{URLs: []string{uri}, Username: creds.Username, Credential: creds.Credential},
+			)
+		}
+	}
+
+	// prepare static-RTP tracks
+	m := webrtc.MediaEngine{}
+	m.RegisterCodec(webrtc.RTPCodecParameters{
+		RTPCodecCapability: webrtc.RTPCodecCapability{MimeType: webrtc.MimeTypeH264, ClockRate: 90000, SDPFmtpLine: "packetization-mode=1;profile-level-id=42e01f"},
+		PayloadType:        109,
+	}, webrtc.RTPCodecTypeVideo)
+	m.RegisterCodec(webrtc.RTPCodecParameters{
+		RTPCodecCapability: webrtc.RTPCodecCapability{MimeType: webrtc.MimeTypeOpus, ClockRate: 48000, Channels: 2},
+		PayloadType:        111,
+	}, webrtc.RTPCodecTypeAudio)
+	api := webrtc.NewAPI(webrtc.WithMediaEngine(&m))
+
+	// create local RTP tracks
+	VideoTrack, err = webrtc.NewTrackLocalStaticRTP(webrtc.RTPCodecCapability{MimeType: "video/H264"}, "video", "pion-video")
+	if err != nil {
+		log.Fatalf("NewTrackLocalStaticRTP(video): %v", err)
+	}
+	AudioTrack, err = webrtc.NewTrackLocalStaticRTP(webrtc.RTPCodecCapability{MimeType: "audio/opus"}, "audio", "pion-audio")
+	if err != nil {
+		log.Fatalf("NewTrackLocalStaticRTP(audio): %v", err)
+	}
+
+	// pump RTP
+	go PumpRTP("[::]:5004", VideoTrack, 109)
+	go PumpRTP("[::]:5006", AudioTrack, 111)
+
+	// handle graceful shutdown
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
+
+	// connect to servo server
+	target := "127.0.0.1:50051"
+	conn, err := grpc.NewClient(
+		target,
+		grpc.WithTransportCredentials(insecure.NewCredentials()),
+	)
+	defer conn.Close()
+
+	if err != nil {
+		log.Fatalf("failed to dial servo server: %v", err)
+	}
+	defer conn.Close()
+
+	servoClient := sv.NewControllerClient(conn)
+
+	// connect and maintain webRTC signalling
+	go func() {
+		for {
+			if err := ConnectAndSignal(api, myID, *room, *server, motors, servoClient); err != nil {
+				log.Printf("Signal loop exited with: %v; retrying in 1s...", err)
+			}
+			time.Sleep(time.Second)
+		}
+	}()
+
+	// start FFmpeg push
+	go RunFFmpegCLI(
+		"/dev/video0", "v4l2", 30, "640x480",
+		"rtp://127.0.0.1:5004",
+		map[string]string{
+			"vf":           "hflip,vflip",
+			"c:v":          "libx264",
+			"preset":       "ultrafast",
+			"tune":         "zerolatency",
+			"pix_fmt":      "yuv420p",
+			"an":           "",
+			"f":            "rtp",
+			"payload_type": "109",
+		},
+	)
+
+	<-sigCh
+	log.Println("Shutting down: sending leave & closing peers...")
+	PeersMu.Lock()
+	for _, pc := range Peers {
+		pc.Close()
+	}
+	PeersMu.Unlock()
+}
 
 // pumpRTP reads RTP packets from addr and writes them into track
 func PumpRTP(addr string, track *webrtc.TrackLocalStaticRTP, payloadType uint8) {
@@ -89,7 +191,7 @@ func handleSignal(
 	myID, room string,
 	msg map[string]interface{},
 	motors []Motorer,
-	servoClient pb.ControllerClient,
+	servoClient sv.ControllerClient,
 ) {
 	typ, _ := msg["type"].(string)
 	from, _ := msg["from"].(string)
@@ -377,7 +479,7 @@ func restartICE(pc *webrtc.PeerConnection, ws *websocket.Conn, myID, peerID, roo
 }
 
 // connectAndSignal manages WebSocket signalling (with auto-reconnect)
-func ConnectAndSignal(api *webrtc.API, myID, room, wsURL string, motors []Motorer, servoClient pb.ControllerClient) error {
+func ConnectAndSignal(api *webrtc.API, myID, room, wsURL string, motors []Motorer, servoClient sv.ControllerClient) error {
 	// dial
 	ws, _, err := websocket.DefaultDialer.Dial(fmt.Sprintf("%s?room=%s", wsURL, room), nil)
 	if err != nil {

@@ -767,6 +767,10 @@ func Area(o ...*Node) *Node {
 	return NewNode("area", o)
 }
 
+func Video(o ...*Node) *Node {
+	return NewNode("video", o)
+}
+
 func Shape(s string) *Node {
 	return &Node{
 		transform: func(p *Node) {
