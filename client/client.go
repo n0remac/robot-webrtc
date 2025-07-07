@@ -214,7 +214,7 @@ func handleSignal(
 		if pc != nil {
 			return pc
 		}
-		pc = createPeerConnection(api, myID, from, room, ws)
+		pc = createPeerConnection(api, myID, from, room, ws, motors, servoClient)
 		PeersMu.Lock()
 		Peers[from] = pc
 		PeersMu.Unlock()
@@ -224,18 +224,7 @@ func handleSignal(
 	switch typ {
 	case "join":
 		log.Printf("Peer %s joined → creating PC + DC offer", from)
-		pc := getOrCreatePC()
-
-		// actively create a data-channel so Go side always offers it
-		if dc, err := pc.CreateDataChannel("keyboard", nil); err != nil {
-			log.Printf("CreateDataChannel keyboard error: %v", err)
-		} else {
-			dc.OnOpen(func() {
-				log.Printf("✔︎ Go DataChannel 'keyboard' open")
-			})
-
-			dc.OnMessage(Controls(motors, servoClient))
-		}
+		_ = getOrCreatePC()
 	case "offer":
 		log.Printf("Received offer from %s", from)
 		pc := getOrCreatePC()
@@ -359,6 +348,8 @@ func createPeerConnection(
 	api *webrtc.API,
 	myID, peerID, room string,
 	ws *websocket.Conn,
+	motors []Motorer,
+	servoClient sv.ControllerClient,
 ) *webrtc.PeerConnection {
 	fmt.Println("Creating PeerConnection for", peerID)
 
@@ -367,6 +358,16 @@ func createPeerConnection(
 	})
 	if err != nil {
 		log.Fatalf("NewPeerConnection error: %v", err)
+	}
+
+	dc, err := pc.CreateDataChannel("keyboard", nil)
+	if err != nil {
+		log.Printf("CreateDataChannel keyboard error: %v", err)
+	} else {
+		dc.OnOpen(func() {
+			log.Printf("✔︎ Go DataChannel 'keyboard' open")
+		})
+		dc.OnMessage(Controls(motors, servoClient))
 	}
 
 	pc.OnDataChannel(func(dc *webrtc.DataChannel) {
