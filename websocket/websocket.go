@@ -2,7 +2,6 @@ package websocket
 
 import (
 	"encoding/json"
-	"fmt"
 	"log"
 	"net/http"
 	"os"
@@ -109,7 +108,6 @@ func (h *Hub) Run() {
 			h.Mu.Unlock()
 
 		case msg := <-h.Broadcast:
-			fmt.Println("Msg received ", msg)
 			h.Mu.Lock()
 			if clients, ok := h.Rooms[msg.Room]; ok {
 				if msg.Id == "" {
