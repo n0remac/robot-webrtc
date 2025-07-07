@@ -159,6 +159,7 @@ function createPeerConnection(peerId) {
     };
   
     pc.handleSignal = async msg => {
+        console.log("Handling signal:", msg);
         switch (msg.type) {
           case 'offer':
             console.log("Received offer from robot, processing…");
@@ -211,7 +212,7 @@ function createPeerConnection(peerId) {
           handleUserDisconnect(msg.from);
           break;
       }
-  }
+    }
   
   return pc;
 }
