@@ -110,7 +110,6 @@ func (h *Hub) Run() {
 
 		case msg := <-h.Broadcast:
 			fmt.Println("Broadcasting message to room:", msg.Room)
-			fmt.Println("  Message content:", string(msg.Content))
 			fmt.Println("  Message ID:", msg.Id)
 			h.Mu.Lock()
 			if clients, ok := h.Rooms[msg.Room]; ok {
