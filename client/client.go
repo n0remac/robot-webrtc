@@ -466,6 +466,7 @@ func ptrString(s string) *string { return &s }
 func ptrUint16(u uint16) *uint16 { return &u }
 
 func restartICE(pc *webrtc.PeerConnection, ws *websocket.Conn, myID, peerID, room string) {
+	fmt.Println("Restarting ICE for", peerID)
 	makingOffer[peerID] = true
 	offer, err := pc.CreateOffer(&webrtc.OfferOptions{ICERestart: true})
 	if err != nil {
