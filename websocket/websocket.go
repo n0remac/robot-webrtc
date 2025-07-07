@@ -2,6 +2,7 @@ package websocket
 
 import (
 	"encoding/json"
+	"fmt"
 	"log"
 	"net/http"
 	"os"
@@ -122,6 +123,7 @@ func (h *Hub) Run() {
 				} else {
 					for client := range clients {
 						if client.Id == msg.Id {
+							fmt.Println("Broadcasting to client:", client.Id, "in room:", msg.Room)
 							select {
 							case client.Send <- msg.Content:
 							default:
