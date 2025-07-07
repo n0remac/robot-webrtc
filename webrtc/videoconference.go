@@ -76,7 +76,6 @@ func registerSignallingCommands(reg *CommandRegistry) {
 		from := data["from"].(string)
 		to := data["to"].(string)
 		fmt.Println("name: ", data["name"])
-		fmt.Println("answer: ", data["answer"])
 		broadcastWebRTC(room, Message{
 			Type:   "answer",
 			From:   from,
