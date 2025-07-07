@@ -42,7 +42,7 @@ async function connectWebSocket() {
       + '/ws/hub?room=' + encodeURIComponent(ROOM)
       + '&playerId=' + encodeURIComponent(myUUID)
     );
-    
+
     ws.onopen = () => {
       Logger.info('WebSocket open');
       ws.send(JSON.stringify({
@@ -55,7 +55,6 @@ async function connectWebSocket() {
     };
   
     ws.onmessage = ({ data }) => {
-      console.log("WS message:", msg);
       const msg = JSON.parse(data);
 
       // Only handle messages *from* the robot
