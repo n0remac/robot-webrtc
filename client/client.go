@@ -209,12 +209,15 @@ func handleSignal(
 	// get-or-create (with mutex)
 	getOrCreatePC := func() *webrtc.PeerConnection {
 		PeersMu.Lock()
-		defer PeersMu.Unlock()
-		if pc := Peers[from]; pc != nil {
+		pc := Peers[from]
+		PeersMu.Unlock()
+		if pc != nil {
 			return pc
 		}
-		pc := createPeerConnection(api, myID, from, room, ws)
+		pc = createPeerConnection(api, myID, from, room, ws)
+		PeersMu.Lock()
 		Peers[from] = pc
+		PeersMu.Unlock()
 		return pc
 	}
 
