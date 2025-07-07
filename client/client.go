@@ -361,7 +361,7 @@ func createPeerConnection(
 	ws *websocket.Conn,
 ) *webrtc.PeerConnection {
 	fmt.Println("Creating PeerConnection for", peerID)
-	
+
 	pc, err := api.NewPeerConnection(webrtc.Configuration{
 		ICEServers: GlobalIceServers,
 	})
@@ -391,10 +391,12 @@ func createPeerConnection(
 	})
 
 	pc.OnNegotiationNeeded(func() {
+		fmt.Println("OnNegotiationNeeded for", peerID)
 		makingOfferMu.Lock()
 		makingOffer[peerID] = true
 		makingOfferMu.Unlock()
 
+		fmt.Println("Creating offer for", peerID)
 		offer, err := pc.CreateOffer(nil)
 		if err != nil {
 			log.Printf("OnNegotiationNeeded CreateOffer: %v", err)
@@ -405,6 +407,8 @@ func createPeerConnection(
 			return
 		}
 		wsWriteMu.Lock()
+
+		fmt.Println("Sending offer to", peerID)
 		ws.WriteJSON(map[string]interface{}{
 			"type":  "offer",
 			"offer": pc.LocalDescription(),
