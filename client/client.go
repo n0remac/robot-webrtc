@@ -360,6 +360,8 @@ func createPeerConnection(
 	myID, peerID, room string,
 	ws *websocket.Conn,
 ) *webrtc.PeerConnection {
+	fmt.Println("Creating PeerConnection for", peerID)
+	
 	pc, err := api.NewPeerConnection(webrtc.Configuration{
 		ICEServers: GlobalIceServers,
 	})
