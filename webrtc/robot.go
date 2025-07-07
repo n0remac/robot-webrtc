@@ -11,8 +11,8 @@ func RobotControlHandler(w http.ResponseWriter, r *http.Request) {
 		Style(Raw(LoadFile("webrtc/video.css"))),
 		Script(Raw(LoadFile("webrtc/logger.js"))),
 		Script(Raw(LoadFile("webrtc/robot-control.js"))),
-		Attr("hx-ext", "ws"),
-		Attr("ws-connect", "/ws/hub?room=robot"),
+		// Attr("hx-ext", "ws"),
+		// Attr("ws-connect", "/ws/hub?room=robot"),
 		Div(Attrs(map[string]string{
 			"class":      "flex flex-col items-center justify-center min-h-screen bg-black",
 			"data-theme": "dark",
