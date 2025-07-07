@@ -109,8 +109,6 @@ func (h *Hub) Run() {
 			h.Mu.Unlock()
 
 		case msg := <-h.Broadcast:
-			fmt.Println("Broadcasting message to room:", msg.Room)
-			fmt.Println("  Message ID:", msg.Id)
 			h.Mu.Lock()
 			if clients, ok := h.Rooms[msg.Room]; ok {
 				if msg.Id == "" {
@@ -124,7 +122,6 @@ func (h *Hub) Run() {
 					}
 				} else {
 					for client := range clients {
-						fmt.Println("      Checking client ID:", client.Id, "against message ID:", msg.Id)
 						if client.Id == msg.Id {
 							fmt.Println("Broadcasting to client:", client.Id, "in room:", msg.Room)
 							select {

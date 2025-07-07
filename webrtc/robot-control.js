@@ -202,6 +202,7 @@ function createPeerConnection(peerId) {
           }
           break;
         case 'candidate':
+          console.log("Received ICE candidate from robot, processing…");
           // if remoteDescription isn’t set yet, queue it
           if (!pc.remoteDescription) {
             pc.queuedCandidates.push(msg.candidate);

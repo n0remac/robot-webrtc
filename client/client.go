@@ -307,6 +307,7 @@ func handleSignal(
 		queuedCandsMu.Unlock()
 
 	case "candidate":
+		fmt.Printf("Received ICE candidate from %s\n", from)
 		raw := msg["candidate"].(map[string]interface{})
 		ice := webrtc.ICECandidateInit{
 			Candidate:     raw["candidate"].(string),
@@ -448,7 +449,7 @@ func createPeerConnection(
 			restartICE(pc, ws, myID, peerID, room)
 		}
 	})
-
+	
 	// add tracks _after_ OnNegotiationNeeded is set
 	if _, err := pc.AddTrack(VideoTrack); err != nil {
 		log.Fatalf("AddTrack video: %v", err)
