@@ -266,7 +266,7 @@ function createKeyPressEventListener(key) {
       console.log(`Key ${normalized} ${action}`);
 
       // broadcast to each peer
-      if (dc.readyState === 'open') {
+      if (dc && dc.readyState === 'open') {
         console.log(`Sending ${action} event to ${dc.label}`);
         dc.send(JSON.stringify({ key: normalized, action }));
       }
