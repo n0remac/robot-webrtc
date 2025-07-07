@@ -56,8 +56,8 @@ async function connectWebSocket() {
   
     ws.onmessage = ({ data }) => {
       const msg = JSON.parse(data);
-      coneole.log("Received message:", msg);
-      
+      console.log("Received message:", msg);
+
       // Only handle messages *from* the robot
       if (msg.from !== ROBOT_ID) return;
 
