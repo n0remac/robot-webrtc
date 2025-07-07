@@ -9,6 +9,8 @@ import (
 	"sort"
 
 	"github.com/google/uuid"
+	. "github.com/n0remac/robot-webrtc/html"
+	. "github.com/n0remac/robot-webrtc/websocket"
 )
 
 func registerVoting(mux *http.ServeMux, registry *CommandRegistry) {
@@ -41,7 +43,7 @@ func registerVoting(mux *http.ServeMux, registry *CommandRegistry) {
 			)
 		}
 
-		hub.Broadcast <- WebsocketMessage{
+		WsHub.Broadcast <- WebsocketMessage{
 			Room:    roomId,
 			Content: []byte(page.Render()),
 		}
@@ -49,7 +51,7 @@ func registerVoting(mux *http.ServeMux, registry *CommandRegistry) {
 	registry.RegisterWebsocket("notecardRanking", func(_ string, hub *Hub, data map[string]interface{}) {
 		roomId := data["roomId"].(string)
 
-		hub.Broadcast <- WebsocketMessage{
+		WsHub.Broadcast <- WebsocketMessage{
 			Room:    roomId,
 			Content: []byte(createRankingPage(roomId).Render()),
 		}
@@ -141,7 +143,7 @@ func handleVoteAPI(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 		}
-			card.DownVotes = append(card.DownVotes, roomId)
+		card.DownVotes = append(card.DownVotes, roomId)
 	}
 	// TODO: A read database would be better here
 	SaveCard(card)

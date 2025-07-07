@@ -23,6 +23,7 @@ import (
 	"sync"
 
 	"github.com/google/uuid"
+	. "github.com/n0remac/robot-webrtc/html"
 )
 
 // -----------------------------------------------------------------------------

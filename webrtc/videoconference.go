@@ -1,4 +1,4 @@
-package main
+package webrtc
 
 import (
 	"crypto/hmac"
@@ -9,17 +9,11 @@ import (
 	"log"
 	"net/http"
 	"os"
-	"strings"
 	"time"
 
-	"github.com/gorilla/websocket"
+	. "github.com/n0remac/robot-webrtc/html"
+	. "github.com/n0remac/robot-webrtc/websocket"
 )
-
-// debugEnabled toggles logging of incoming browser messages
-var debugEnabled = func() bool {
-	v := strings.ToLower(os.Getenv("WEBRTC_DEBUG"))
-	return v == "1" || v == "true" || v == "yes"
-}()
 
 // TURN credential settings
 var (
@@ -49,7 +43,7 @@ func VideoHandler(mux *http.ServeMux, registry *CommandRegistry) {
 
 	// WebSocket endpoints
 	mux.HandleFunc("/ws/hub", func(w http.ResponseWriter, r *http.Request) {
-		conn, err := upgrader.Upgrade(w, r, nil)
+		conn, err := Upgrader.Upgrade(w, r, nil)
 		if err != nil {
 			log.Printf("WS upgrade /ws/hub → %v", err)
 			return
@@ -59,17 +53,15 @@ func VideoHandler(mux *http.ServeMux, registry *CommandRegistry) {
 			room = "default"
 		}
 		client := &WebsocketClient{
-			conn:     conn,
-			send:     make(chan []byte, 256),
-			registry: registry,
-			room:     room,
+			Conn:     conn,
+			Send:     make(chan []byte, 256),
+			Registry: registry,
+			Room:     room,
 		}
-		hub.register <- client
-		go client.writePump()
-		client.readPump()
+		WsHub.Register <- client
+		go client.WritePump()
+		client.ReadPump()
 	})
-
-	withWS("/ws/logs", mux, logSocketWS)
 }
 
 // registerSignallingCommands wires WebRTC commands into the Hub
@@ -145,7 +137,7 @@ func broadcastWebRTC(hub *Hub, room string, msg Message) {
 		log.Println("⚠️  marshal error:", err)
 		return
 	}
-	hub.Broadcast <- WebsocketMessage{Room: room, Content: raw}
+	WsHub.Broadcast <- WebsocketMessage{Room: room, Content: raw}
 }
 
 // VideoPage renders the HTML layout for the video client
@@ -157,8 +149,8 @@ func VideoPage(w http.ResponseWriter, r *http.Request) {
 	}
 
 	page := DefaultLayout(
-		Style(Raw(loadFile("video.css"))),
-		Script(Raw(loadFile("video.js"))),
+		Style(Raw(LoadFile("webrtc/video.css"))),
+		Script(Raw(LoadFile("webrtc/video.js"))),
 		Attr("hx-ext", "ws"),
 		Attr("ws-connect", "/ws/hub?room="+room),
 		Div(Attrs(map[string]string{
@@ -229,43 +221,4 @@ func generateTurnCredentials(secret, user string, ttlSeconds int64) (string, str
 	mac.Write([]byte(username))
 	password := base64.StdEncoding.EncodeToString(mac.Sum(nil))
 	return username, password
-}
-
-// logSocketWS streams browser logs to both file and stdout
-func logSocketWS(conn *websocket.Conn) {
-	if !debugEnabled {
-		conn.WriteMessage(websocket.CloseMessage,
-			websocket.FormatCloseMessage(websocket.ClosePolicyViolation, "logging disabled"))
-		conn.Close()
-		return
-	}
-	defer conn.Close()
-
-	// Ensure log directory
-	if err := os.MkdirAll("serverlogs", 0755); err != nil {
-		log.Printf("mkdir serverlogs error: %v", err)
-		return
-	}
-
-	// Open append‐only daily log
-	fileName := fmt.Sprintf("serverlogs/%s.webrtc.log", time.Now().Format("2006-01-02"))
-	f, err := os.OpenFile(fileName, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
-	if err != nil {
-		log.Printf("open log file error: %v", err)
-		return
-	}
-	defer f.Close()
-
-	log.Printf("📝 log‐socket connected → %s", fileName)
-
-	for {
-		_, raw, err := conn.ReadMessage()
-		if err != nil {
-			log.Printf("log‐socket closed: %v", err)
-			return
-		}
-		// write and mirror
-		f.Write(append(raw, '\n'))
-		log.Printf("[browser] %s", raw)
-	}
 }

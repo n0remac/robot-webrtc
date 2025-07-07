@@ -12,6 +12,7 @@ import (
 
 	"github.com/chromedp/cdproto/cdp"
 	"github.com/chromedp/chromedp"
+	. "github.com/n0remac/robot-webrtc/html"
 )
 
 func Fantasy(mux *http.ServeMux) {
@@ -35,7 +36,7 @@ func Fantasy(mux *http.ServeMux) {
 
 	mux.HandleFunc("/fantasy/sheet/download", func(w http.ResponseWriter, r *http.Request) {
 		zipPath := "./data/fantasy_sheets.zip"
-	
+
 		// Always regenerate the zip to ensure it's fresh
 		err := zipFolder("./data/fantasy_sheets", zipPath)
 		if err != nil {
@@ -43,14 +44,14 @@ func Fantasy(mux *http.ServeMux) {
 			fmt.Println("Failed to generate zip:", err)
 			return
 		}
-	
+
 		// Set headers to force download
 		w.Header().Set("Content-Type", "application/zip")
 		w.Header().Set("Content-Disposition", "attachment; filename=\"fantasy_sheets.zip\"")
-	
+
 		http.ServeFile(w, r, zipPath)
 	})
-	
+
 }
 
 func generateSheetScreenshots() {
@@ -296,9 +297,6 @@ func zipFolder(sourceDir, zipPath string) error {
 	fmt.Println("✅ ZIP creation completed")
 	return nil
 }
-
-
-
 
 type FantasyCard struct {
 	Title    string

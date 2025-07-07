@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 
+	. "github.com/n0remac/robot-webrtc/html"
 	"github.com/sashabaranov/go-openai"
 )
 

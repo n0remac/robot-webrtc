@@ -12,6 +12,8 @@ import (
 	"sync"
 
 	"github.com/google/uuid"
+	. "github.com/n0remac/robot-webrtc/html"
+	. "github.com/n0remac/robot-webrtc/websocket"
 	"github.com/sashabaranov/go-openai"
 )
 
@@ -212,7 +214,7 @@ func Notecard(mux *http.ServeMux, registry *CommandRegistry) {
 		}
 	})
 	mux.Handle("/notecards/", http.StripPrefix("/notecards/", http.FileServer(http.Dir("notecards"))))
-	mux.HandleFunc("/ws/createNotecard", createWebsocket(registry))
+	mux.HandleFunc("/ws/createNotecard", CreateWebsocket(registry))
 
 	registry.RegisterWebsocket("createNotecard", func(_ string, hub *Hub, data map[string]interface{}) {
 		entry := data["entry"].(string)
@@ -237,7 +239,7 @@ func Notecard(mux *http.ServeMux, registry *CommandRegistry) {
 			card.AIEntry = description
 			card.ImagePrompt = imagePrompt
 
-			hub.Broadcast <- WebsocketMessage{
+			WsHub.Broadcast <- WebsocketMessage{
 				Room:    roomID,
 				Content: []byte(FramedCard(card, createNoteCardDiv(card)).Render()),
 			}
@@ -255,7 +257,7 @@ func Notecard(mux *http.ServeMux, registry *CommandRegistry) {
 				return
 			}
 
-			hub.Broadcast <- WebsocketMessage{
+			WsHub.Broadcast <- WebsocketMessage{
 				Room:    roomID,
 				Content: []byte(FramedCard(card, createNoteCardDiv(card)).Render()),
 			}
@@ -269,7 +271,7 @@ func Notecard(mux *http.ServeMux, registry *CommandRegistry) {
 			),
 		)
 
-		hub.Broadcast <- WebsocketMessage{
+		WsHub.Broadcast <- WebsocketMessage{
 			Room:    roomID,
 			Content: []byte(content.Render()),
 		}
@@ -277,7 +279,7 @@ func Notecard(mux *http.ServeMux, registry *CommandRegistry) {
 	registry.RegisterWebsocket("notecardCreatingTab", func(_ string, hub *Hub, data map[string]interface{}) {
 		roomId := data["roomId"].(string)
 
-		hub.Broadcast <- WebsocketMessage{
+		WsHub.Broadcast <- WebsocketMessage{
 			Room:    roomId,
 			Content: []byte(createNoteCardPage(roomId).Render()),
 		}

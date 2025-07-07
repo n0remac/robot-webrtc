@@ -62,11 +62,12 @@ Logger.attachSocket(`${wsProtocol}://${domainName}/ws/logs`);
 document.addEventListener("DOMContentLoaded", () => {
   document.getElementById('test-camera').addEventListener('click', testCamera);
   document.getElementById('test-mic').addEventListener('click', testMic);
-    document.getElementById('join-btn').addEventListener('click', joinSession);
-    document.getElementById('mute-btn').addEventListener('click', toggleMute);
-    document.getElementById('video-btn').addEventListener('click', toggleVideo);
-    document.getElementById('noise-btn').addEventListener('click', toggleNoise);
+  document.getElementById('join-btn').addEventListener('click', joinSession);
+  document.getElementById('mute-btn').addEventListener('click', toggleMute);
+  document.getElementById('video-btn').addEventListener('click', toggleVideo);
+  document.getElementById('noise-btn').addEventListener('click', toggleNoise);
 });
+
 let myUUID = null;
 let myName;
 let localStream;

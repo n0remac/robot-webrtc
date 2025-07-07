@@ -12,6 +12,8 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	. "github.com/n0remac/robot-webrtc/html"
+	. "github.com/n0remac/robot-webrtc/websocket"
 	"github.com/sashabaranov/go-openai"
 )
 
@@ -86,7 +88,7 @@ func HomePage(websocketRegistry *CommandRegistry) *Node {
 			// Build a new node with a fresh random ID
 			newContentNode := NodeForContent(newContent)
 
-			hub.Broadcast <- WebsocketMessage{
+			WsHub.Broadcast <- WebsocketMessage{
 				Room:    id,
 				Content: []byte(fmt.Sprintf(`{"type":"newContent","html":%q}`, newContentNode.Render())),
 			}
@@ -97,9 +99,9 @@ func HomePage(websocketRegistry *CommandRegistry) *Node {
 
 	return DefaultLayout(
 		Style(
-			Raw(loadFile("home.css"))),
+			Raw(LoadFile("home.css"))),
 		Script(
-			Raw(loadFile("home.js")),
+			Raw(LoadFile("home.js")),
 		),
 		Attr("hx-ext", "ws"),
 		Attr("ws-connect", "/ws/hub?room="+id),
@@ -190,14 +192,6 @@ func WrapWordsInSpans(input string) *Node {
 // ContentSelectionResponse represents the structure of the function call response.
 type ContentSelectionResponse struct {
 	Content string `json:"content"`
-}
-
-func loadFile(filename string) string {
-	jsContent, err := os.ReadFile(filename)
-	if err != nil {
-		log.Fatalf("Error reading file: %s: %v", filename, err)
-	}
-	return string(jsContent)
 }
 
 func loadProcessedContent(filename string) []ContentWithKeywords {

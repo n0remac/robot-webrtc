@@ -1,4 +1,4 @@
-package main
+package html
 
 import (
 	"context"
@@ -6,7 +6,9 @@ import (
 	"go/ast"
 	"go/token"
 	"html/template"
+	"log"
 	"net/http"
+	"os"
 	"strings"
 )
 
@@ -1336,4 +1338,12 @@ func Y1(s string) *Node {
 
 func Y2(s string) *Node {
 	return NewAttrNode("y2", s)
+}
+
+func LoadFile(filename string) string {
+	jsContent, err := os.ReadFile(filename)
+	if err != nil {
+		log.Fatalf("Error reading file: %s: %v", filename, err)
+	}
+	return string(jsContent)
 }

@@ -1,37 +1,21 @@
 package main
 
 import (
+	"fmt"
 	"log"
 	"net/http"
 	"os"
+	"strings"
+	"time"
 
 	"github.com/gorilla/websocket"
+	. "github.com/n0remac/robot-webrtc/webrtc"
+	. "github.com/n0remac/robot-webrtc/websocket"
 )
 
 const (
 	webPort = ":8080"
 )
-
-var upgrader = websocket.Upgrader{
-	CheckOrigin: func(r *http.Request) bool {
-		origin := r.Header.Get("Origin")
-
-		// Always allow empty origin (Playwright often omits it)
-		if origin == "" {
-			return true
-		}
-
-		// Accept any origin in non-production
-		if os.Getenv("ENVIRONMENT") != "production" {
-			return true
-		}
-
-		// Default production restriction
-		return origin == "https://noremac.dev"
-	},
-	ReadBufferSize:  1024,
-	WriteBufferSize: 1024,
-}
 
 func main() {
 	if debugEnabled {
@@ -55,16 +39,55 @@ func main() {
 	Fantasy(mux)
 	Notecard(mux, globalRegistry)
 
-	go hub.run()
+	WithWS("/ws/logs", mux, logSocketWS)
+
+	go WsHub.Run()
 
 	log.Println("WebRTC server started on port", webPort)
 	log.Fatal(http.ListenAndServe(webPort, mux))
 }
 
-func logInfo(msg string, meta map[string]interface{}) {
-	log.Printf("[INFO] %s | %v", msg, meta)
-}
+// debugEnabled toggles logging of incoming browser messages
+var debugEnabled = func() bool {
+	v := strings.ToLower(os.Getenv("WEBRTC_DEBUG"))
+	return v == "1" || v == "true" || v == "yes"
+}()
 
-func logError(msg string, err error, meta map[string]interface{}) {
-	log.Printf("[ERROR] %s: %v | %v", msg, err, meta)
+// logSocketWS streams browser logs to both file and stdout
+func logSocketWS(conn *websocket.Conn) {
+	if !debugEnabled {
+		conn.WriteMessage(websocket.CloseMessage,
+			websocket.FormatCloseMessage(websocket.ClosePolicyViolation, "logging disabled"))
+		conn.Close()
+		return
+	}
+	defer conn.Close()
+
+	// Ensure log directory
+	if err := os.MkdirAll("serverlogs", 0755); err != nil {
+		log.Printf("mkdir serverlogs error: %v", err)
+		return
+	}
+
+	// Open append‐only daily log
+	fileName := fmt.Sprintf("serverlogs/%s.webrtc.log", time.Now().Format("2006-01-02"))
+	f, err := os.OpenFile(fileName, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
+	if err != nil {
+		log.Printf("open log file error: %v", err)
+		return
+	}
+	defer f.Close()
+
+	log.Printf("📝 log‐socket connected → %s", fileName)
+
+	for {
+		_, raw, err := conn.ReadMessage()
+		if err != nil {
+			log.Printf("log‐socket closed: %v", err)
+			return
+		}
+		// write and mirror
+		f.Write(append(raw, '\n'))
+		log.Printf("[browser] %s", raw)
+	}
 }

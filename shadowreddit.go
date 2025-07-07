@@ -12,6 +12,8 @@ import (
 	"time"
 
 	"github.com/sashabaranov/go-openai"
+	. "github.com/n0remac/robot-webrtc/html"
+	. "github.com/n0remac/robot-webrtc/websocket"
 )
 
 // ---------- DATA STRUCTURES ----------
@@ -226,7 +228,7 @@ func ShadowReddit(mux *http.ServeMux) {
 			return
 		}
 
-		conn, err := upgrader.Upgrade(w, r, nil)
+		conn, err := Upgrader.Upgrade(w, r, nil)
 		if err != nil {
 			log.Printf("WebSocket upgrade error: %v", err)
 			return

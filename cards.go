@@ -7,6 +7,8 @@ import (
 	"sync"
 
 	"github.com/google/uuid"
+	. "github.com/n0remac/robot-webrtc/html"
+	. "github.com/n0remac/robot-webrtc/websocket"
 )
 
 type Lobby struct {
@@ -84,7 +86,7 @@ func lobbyWebsocket(registry *CommandRegistry) func(http.ResponseWriter, *http.R
 		for _, player := range players {
 			page := gameScreen(game, player.Id)
 
-			hub.Broadcast <- WebsocketMessage{
+			WsHub.Broadcast <- WebsocketMessage{
 				Room:    room,
 				Content: []byte(page.Render()),
 				Id:      player.Id,
@@ -180,12 +182,12 @@ func lobbyWebsocket(registry *CommandRegistry) func(http.ResponseWriter, *http.R
 				engine.TriggerHook(HookOnPhaseEnter, game, nil)
 				// broadcast fresh hands and cleared trick area
 				for _, p := range game.Players {
-					hub.Broadcast <- WebsocketMessage{
+					WsHub.Broadcast <- WebsocketMessage{
 						Room:    room,
 						Id:      p.Id,
 						Content: []byte(createPlayerHand(game, p.Id).Render()),
 					}
-					hub.Broadcast <- WebsocketMessage{
+					WsHub.Broadcast <- WebsocketMessage{
 						Room:    room,
 						Id:      p.Id,
 						Content: []byte(createTrickArea(game, p.Id).Render()),
@@ -198,13 +200,13 @@ func lobbyWebsocket(registry *CommandRegistry) func(http.ResponseWriter, *http.R
 		// 7) Broadcast updated views
 		for _, p := range game.Players {
 			if p.Id == playerId {
-				hub.Broadcast <- WebsocketMessage{
+				WsHub.Broadcast <- WebsocketMessage{
 					Room:    room,
 					Id:      playerId,
 					Content: []byte(createPlayerHand(game, playerId).Render()),
 				}
 			}
-			hub.Broadcast <- WebsocketMessage{
+			WsHub.Broadcast <- WebsocketMessage{
 				Room:    room,
 				Id:      p.Id,
 				Content: []byte(createTrickArea(game, p.Id).Render()),
@@ -253,13 +255,13 @@ func lobbyWebsocket(registry *CommandRegistry) func(http.ResponseWriter, *http.R
 		game.Discard = append(game.Discard, *playedCard)
 
 		for _, player := range game.Players {
-			hub.Broadcast <- WebsocketMessage{
+			WsHub.Broadcast <- WebsocketMessage{
 				Room:    room,
 				Content: []byte(createDiscardPile(game).Render()),
 				Id:      player.Id,
 			}
 			if player.Id == playerId {
-				hub.Broadcast <- WebsocketMessage{
+				WsHub.Broadcast <- WebsocketMessage{
 					Room:    room,
 					Content: []byte(createPlayerHand(game, playerId).Render()),
 					Id:      player.Id,
@@ -268,7 +270,7 @@ func lobbyWebsocket(registry *CommandRegistry) func(http.ResponseWriter, *http.R
 		}
 	})
 
-	return createWebsocket(registry)
+	return CreateWebsocket(registry)
 }
 
 func renderLobbyPage(w http.ResponseWriter, r *http.Request) {
@@ -431,7 +433,7 @@ func gameScreen(game *Game, playerId string) *Node {
 
 	return DefaultLayout(
 		Div(
-			Script(Raw(loadFile("cards.js"))),
+			Script(Raw(LoadFile("cards.js"))),
 			Id("lobby"),
 			Div(
 				Div(Class("flex flex-col h-screen"),

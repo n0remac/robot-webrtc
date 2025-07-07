@@ -15,6 +15,8 @@ import (
 	"time"
 
 	"github.com/gorilla/websocket"
+	. "github.com/n0remac/robot-webrtc/html"
+	. "github.com/n0remac/robot-webrtc/websocket"
 	"github.com/sashabaranov/go-openai"
 )
 
@@ -23,7 +25,7 @@ import (
 // ------------------------------------------------------
 
 type Book struct {
-	Title string          `json:"title"`
+	Title string               `json:"title"`
 	Pages map[string]StoryPage `json:"pages"`
 }
 
@@ -241,7 +243,7 @@ func GenerateStory(mux *http.ServeMux) {
 			http.Error(w, "Invalid session ID", http.StatusBadRequest)
 			return
 		}
-		conn, err := upgrader.Upgrade(w, r, nil)
+		conn, err := Upgrader.Upgrade(w, r, nil)
 		if err != nil {
 			log.Printf("[ERROR] Upgrading to WS: %v", err)
 			return
@@ -372,173 +374,173 @@ func BookLoadingPage(sessionID string) *Node {
 // ------------------------------------------------------
 
 func generateBook(session *Session, userPrompt string, client *openai.Client) {
-    log.Printf("[INFO] Starting generation for session=%s, prompt=%q", session.ID, userPrompt)
+	log.Printf("[INFO] Starting generation for session=%s, prompt=%q", session.ID, userPrompt)
 
-    // 1) Create ChatCompletion with function-calling
-    systemMsg := openai.ChatCompletionMessage{
-        Role:    openai.ChatMessageRoleSystem,
-        Content: "You are a creative children's book generator. Return your answer in JSON by calling create_book_json with a whimsical style.",
-    }
-    userMsg := openai.ChatCompletionMessage{
-        Role:    openai.ChatMessageRoleUser,
-        Content: userPrompt,
-    }
-    resp, err := client.CreateChatCompletion(context.Background(), openai.ChatCompletionRequest{
-        Model:        "gpt-4-0613",
-        Messages:     []openai.ChatCompletionMessage{systemMsg, userMsg},
-        Functions:    []openai.FunctionDefinition{createBookFn},
-        FunctionCall: openai.FunctionCall{Name: createBookFn.Name},
-    })
-    if err != nil {
-        sendWebSocketError(session, fmt.Errorf("OpenAI error: %v", err))
-        return
-    }
-    if len(resp.Choices) == 0 || resp.Choices[0].Message.FunctionCall == nil {
-        sendWebSocketError(session, fmt.Errorf("No function call response from model"))
-        return
-    }
-    fnCall := resp.Choices[0].Message.FunctionCall
+	// 1) Create ChatCompletion with function-calling
+	systemMsg := openai.ChatCompletionMessage{
+		Role:    openai.ChatMessageRoleSystem,
+		Content: "You are a creative children's book generator. Return your answer in JSON by calling create_book_json with a whimsical style.",
+	}
+	userMsg := openai.ChatCompletionMessage{
+		Role:    openai.ChatMessageRoleUser,
+		Content: userPrompt,
+	}
+	resp, err := client.CreateChatCompletion(context.Background(), openai.ChatCompletionRequest{
+		Model:        "gpt-4-0613",
+		Messages:     []openai.ChatCompletionMessage{systemMsg, userMsg},
+		Functions:    []openai.FunctionDefinition{createBookFn},
+		FunctionCall: openai.FunctionCall{Name: createBookFn.Name},
+	})
+	if err != nil {
+		sendWebSocketError(session, fmt.Errorf("OpenAI error: %v", err))
+		return
+	}
+	if len(resp.Choices) == 0 || resp.Choices[0].Message.FunctionCall == nil {
+		sendWebSocketError(session, fmt.Errorf("No function call response from model"))
+		return
+	}
+	fnCall := resp.Choices[0].Message.FunctionCall
 
-    // 2) Parse the JSON into our Book struct
-    var raw map[string]json.RawMessage
-    if err := json.Unmarshal([]byte(fnCall.Arguments), &raw); err != nil {
-        sendWebSocketError(session, fmt.Errorf("Error parsing JSON arguments: %v", err))
-        return
-    }
-    var title string
-    if err := json.Unmarshal(raw["title"], &title); err != nil {
-        sendWebSocketError(session, fmt.Errorf("Error unmarshaling title: %v", err))
-        return
-    }
-    pages, err := tryUnmarshalPages(raw["pages"])
-    if err != nil {
-        sendWebSocketError(session, fmt.Errorf("Error unmarshaling pages: %v", err))
-        return
-    }
-    book := Book{Title: title, Pages: pages}
+	// 2) Parse the JSON into our Book struct
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(fnCall.Arguments), &raw); err != nil {
+		sendWebSocketError(session, fmt.Errorf("Error parsing JSON arguments: %v", err))
+		return
+	}
+	var title string
+	if err := json.Unmarshal(raw["title"], &title); err != nil {
+		sendWebSocketError(session, fmt.Errorf("Error unmarshaling title: %v", err))
+		return
+	}
+	pages, err := tryUnmarshalPages(raw["pages"])
+	if err != nil {
+		sendWebSocketError(session, fmt.Errorf("Error unmarshaling pages: %v", err))
+		return
+	}
+	book := Book{Title: title, Pages: pages}
 
-    // If no pages, finalize
-    if len(book.Pages) == 0 {
-        finalizeEmptyBook(session, book)
-        sendWebSocketDone(session)
-        return
-    }
+	// If no pages, finalize
+	if len(book.Pages) == 0 {
+		finalizeEmptyBook(session, book)
+		sendWebSocketDone(session)
+		return
+	}
 
-    // Create subdir "books/<sessionID>"
-    subdir := fmt.Sprintf("books/%s", session.ID)
-    if err := os.MkdirAll(subdir, 0755); err != nil {
-        sendWebSocketError(session, fmt.Errorf("cannot create subdir: %v", err))
-        return
-    }
+	// Create subdir "books/<sessionID>"
+	subdir := fmt.Sprintf("books/%s", session.ID)
+	if err := os.MkdirAll(subdir, 0755); err != nil {
+		sendWebSocketError(session, fmt.Errorf("cannot create subdir: %v", err))
+		return
+	}
 
-    // Sort numeric page keys
-    var pageNums []int
-    for k := range pages {
-        if n, e := strconv.Atoi(k); e == nil {
-            pageNums = append(pageNums, n)
-        }
-    }
-    sort.Ints(pageNums)
+	// Sort numeric page keys
+	var pageNums []int
+	for k := range pages {
+		if n, e := strconv.Atoi(k); e == nil {
+			pageNums = append(pageNums, n)
+		}
+	}
+	sort.Ints(pageNums)
 
-    // concurrency: create an image for each page in parallel
-    var wg sync.WaitGroup
-    wg.Add(len(pageNums))
+	// concurrency: create an image for each page in parallel
+	var wg sync.WaitGroup
+	wg.Add(len(pageNums))
 
-    var mu sync.Mutex          // guards updates to book.Pages
-    pagesCompleted := 0        // how many pages are done
-    session.Mutex.Lock()
-    session.Title = book.Title // for progress
-    session.TotalPages = len(pageNums)
-    session.CurrentPage = 0
-    session.Mutex.Unlock()
+	var mu sync.Mutex   // guards updates to book.Pages
+	pagesCompleted := 0 // how many pages are done
+	session.Mutex.Lock()
+	session.Title = book.Title // for progress
+	session.TotalPages = len(pageNums)
+	session.CurrentPage = 0
+	session.Mutex.Unlock()
 
-    for i, pgNum := range pageNums {
-        go func(i, pgNum int) {
-            defer wg.Done()
+	for i, pgNum := range pageNums {
+		go func(i, pgNum int) {
+			defer wg.Done()
 
-            // If we already encountered an error, skip
-            session.Mutex.Lock()
-            alreadyDone := session.Done || session.Error != nil
-            session.Mutex.Unlock()
-            if alreadyDone {
-                return
-            }
+			// If we already encountered an error, skip
+			session.Mutex.Lock()
+			alreadyDone := session.Done || session.Error != nil
+			session.Mutex.Unlock()
+			if alreadyDone {
+				return
+			}
 
-            strPage := strconv.Itoa(pgNum)
-            pg := book.Pages[strPage]
+			strPage := strconv.Itoa(pgNum)
+			pg := book.Pages[strPage]
 
-            // Request a 512x512 image from OpenAI
-            imgResp, err := client.CreateImage(context.Background(), openai.ImageRequest{
-                Prompt: fmt.Sprintf("Children's book style illustration: %s. No text in the image.", pg.ImageDescription),
-                N:      1,
-                Size:   "512x512",
-            })
-            if err != nil {
-                sendWebSocketError(session, fmt.Errorf("image generation error on page %s: %v", strPage, err))
-                return
-            }
-            if len(imgResp.Data) == 0 {
-                sendWebSocketError(session, fmt.Errorf("no image data returned for page %s", strPage))
-                return
-            }
+			// Request a 512x512 image from OpenAI
+			imgResp, err := client.CreateImage(context.Background(), openai.ImageRequest{
+				Prompt: fmt.Sprintf("Children's book style illustration: %s. No text in the image.", pg.ImageDescription),
+				N:      1,
+				Size:   "512x512",
+			})
+			if err != nil {
+				sendWebSocketError(session, fmt.Errorf("image generation error on page %s: %v", strPage, err))
+				return
+			}
+			if len(imgResp.Data) == 0 {
+				sendWebSocketError(session, fmt.Errorf("no image data returned for page %s", strPage))
+				return
+			}
 
-            // Download the image
-            imageURL := imgResp.Data[0].URL
-            res, err := http.Get(imageURL)
-            if err != nil {
-                sendWebSocketError(session, fmt.Errorf("error downloading image for page %s: %v", strPage, err))
-                return
-            }
-            imgBytes, err := io.ReadAll(res.Body)
-            res.Body.Close()
-            if err != nil {
-                sendWebSocketError(session, fmt.Errorf("error reading image for page %s: %v", strPage, err))
-                return
-            }
+			// Download the image
+			imageURL := imgResp.Data[0].URL
+			res, err := http.Get(imageURL)
+			if err != nil {
+				sendWebSocketError(session, fmt.Errorf("error downloading image for page %s: %v", strPage, err))
+				return
+			}
+			imgBytes, err := io.ReadAll(res.Body)
+			res.Body.Close()
+			if err != nil {
+				sendWebSocketError(session, fmt.Errorf("error reading image for page %s: %v", strPage, err))
+				return
+			}
 
-            // Save image file: "page-<i+1>.png"
-            imageFilename := fmt.Sprintf("page-%d.png", i+1)
-            fullImagePath := fmt.Sprintf("%s/%s", subdir, imageFilename)
-            if err := os.WriteFile(fullImagePath, imgBytes, 0644); err != nil {
-                sendWebSocketError(session, fmt.Errorf("error writing image file: %v", err))
-                return
-            }
+			// Save image file: "page-<i+1>.png"
+			imageFilename := fmt.Sprintf("page-%d.png", i+1)
+			fullImagePath := fmt.Sprintf("%s/%s", subdir, imageFilename)
+			if err := os.WriteFile(fullImagePath, imgBytes, 0644); err != nil {
+				sendWebSocketError(session, fmt.Errorf("error writing image file: %v", err))
+				return
+			}
 
-            // Update the Book data (ImagePath)
-            mu.Lock()
-            pg.ImagePath = imageFilename
-            book.Pages[strPage] = pg
-            mu.Unlock()
+			// Update the Book data (ImagePath)
+			mu.Lock()
+			pg.ImagePath = imageFilename
+			book.Pages[strPage] = pg
+			mu.Unlock()
 
-            // Increment "pagesCompleted", send progress
-            session.Mutex.Lock()
-            pagesCompleted++
-            session.CurrentPage = pagesCompleted
-            sendWebSocketProgress(session)
-            session.Mutex.Unlock()
+			// Increment "pagesCompleted", send progress
+			session.Mutex.Lock()
+			pagesCompleted++
+			session.CurrentPage = pagesCompleted
+			sendWebSocketProgress(session)
+			session.Mutex.Unlock()
 
-        }(i, pgNum)
-    }
+		}(i, pgNum)
+	}
 
-    wg.Wait()
+	wg.Wait()
 
-    // If an error occurred, session.Error is set -> just return
-    session.Mutex.Lock()
-    defer session.Mutex.Unlock()
-    if session.Error != nil || session.Done {
-        // Already marked as done or error
-        return
-    }
+	// If an error occurred, session.Error is set -> just return
+	session.Mutex.Lock()
+	defer session.Mutex.Unlock()
+	if session.Error != nil || session.Done {
+		// Already marked as done or error
+		return
+	}
 
-    // Save final JSON
-    bookPath := fmt.Sprintf("%s/book.json", subdir)
-    if err := saveBookJSON(bookPath, book); err != nil {
-        sendWebSocketError(session, err)
-        return
-    }
+	// Save final JSON
+	bookPath := fmt.Sprintf("%s/book.json", subdir)
+	if err := saveBookJSON(bookPath, book); err != nil {
+		sendWebSocketError(session, err)
+		return
+	}
 
-    session.Done = true
-    sendWebSocketDone(session)
+	session.Done = true
+	sendWebSocketDone(session)
 }
 
 // finalize an empty book (zero pages)
@@ -747,21 +749,20 @@ func sendWebSocketProgress(s *Session) {
 }
 
 func sendWebSocketDone(s *Session) {
-    if s.Conn == nil {
-        return
-    }
-    // We'll just call it "url" for clarity
-    msg := map[string]interface{}{
-        "type": "done",
-        "url":  fmt.Sprintf("/story/view?id=%s", s.ID),
-    }
-    if err := s.Conn.WriteJSON(msg); err != nil {
-        log.Printf("[WARN] session=%s sending done error: %v", s.ID, err)
-        s.Conn.Close()
-        s.Conn = nil
-    }
+	if s.Conn == nil {
+		return
+	}
+	// We'll just call it "url" for clarity
+	msg := map[string]interface{}{
+		"type": "done",
+		"url":  fmt.Sprintf("/story/view?id=%s", s.ID),
+	}
+	if err := s.Conn.WriteJSON(msg); err != nil {
+		log.Printf("[WARN] session=%s sending done error: %v", s.ID, err)
+		s.Conn.Close()
+		s.Conn = nil
+	}
 }
-
 
 func sendWebSocketError(s *Session, err error) {
 	s.Mutex.Lock()
