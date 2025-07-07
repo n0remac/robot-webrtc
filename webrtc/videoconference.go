@@ -75,7 +75,6 @@ func registerSignallingCommands(reg *CommandRegistry) {
 		room := getRoom(data)
 		from := data["from"].(string)
 		to := data["to"].(string)
-		fmt.Println("name: ", data["name"])
 		broadcastWebRTC(room, Message{
 			Type:   "answer",
 			From:   from,
@@ -116,6 +115,7 @@ func getRoom(data map[string]interface{}) string {
 
 // broadcastWebRTC marshals and broadcasts a signalling message into the Hub
 func broadcastWebRTC(room string, msg Message) {
+	fmt.Println("Broadcasting msg of type", msg.Type, " to ", msg.To)
 	raw, err := json.Marshal(msg)
 	if err != nil {
 		log.Println("⚠️  marshal error:", err)
