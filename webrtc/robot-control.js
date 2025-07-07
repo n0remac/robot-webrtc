@@ -187,7 +187,8 @@ function createPeerConnection(peerId) {
               answer: pc.localDescription,
               from:   myUUID,
               to:     peerId,
-              room:   ROOM
+              room:   ROOM,
+              name:   'robot'
             }));
             Logger.info('answer sent', { to: peerId });
             break;
