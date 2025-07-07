@@ -161,6 +161,7 @@ function createPeerConnection(peerId) {
     pc.handleSignal = async msg => {
         switch (msg.type) {
           case 'offer':
+            console.log("Received offer from robot, processing…");
             const collision = pc.makingOffer || pc.signalingState !== 'stable';
             pc.ignoreOffer = !polite && collision;
             if (pc.ignoreOffer) return;
@@ -173,7 +174,7 @@ function createPeerConnection(peerId) {
     
             const answer = await pc.createAnswer();
             await pc.setLocalDescription(answer);
-            
+
             console.log("Received offer from robot, sending answer…");
             ws.send(JSON.stringify({
               type:   'answer',
