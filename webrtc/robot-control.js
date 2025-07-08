@@ -316,3 +316,38 @@ document.addEventListener("DOMContentLoaded", () => {
         document.getElementById('start-video-btn').textContent = 'Connecting...';
     });
 });
+
+function triggerKeyEvent(key, type) {
+    const event = new KeyboardEvent(type, {
+        key: key,
+        bubbles: true,
+        cancelable: true,
+    });
+    window.dispatchEvent(event);
+}
+
+// Add event listeners for the control buttons after DOM loads
+window.addEventListener('DOMContentLoaded', () => {
+    document.querySelectorAll('.control-btn').forEach(btn => {
+        const key = btn.dataset.key;
+        btn.addEventListener('mousedown', e => {
+            triggerKeyEvent(key, 'keydown');
+        });
+        btn.addEventListener('mouseup', e => {
+            triggerKeyEvent(key, 'keyup');
+        });
+        btn.addEventListener('mouseleave', e => {
+            triggerKeyEvent(key, 'keyup'); // handle mouse out
+        });
+        // For accessibility / touch
+        btn.addEventListener('touchstart', e => {
+            e.preventDefault();
+            triggerKeyEvent(key, 'keydown');
+        }, {passive: false});
+        btn.addEventListener('touchend', e => {
+            e.preventDefault();
+            triggerKeyEvent(key, 'keyup');
+        }, {passive: false});
+    });
+});
+
