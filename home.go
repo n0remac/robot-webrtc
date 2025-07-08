@@ -117,13 +117,7 @@ func HomePage(websocketRegistry *CommandRegistry) *Node {
 			),
 			Div(
 				Class("max-w-4xl mx-auto p-8 text-center space-y-4"),
-				NodeForContent(`
-This website is an interactive, ever-evolving platform where each piece of content can shift dynamically based on your interactions. You can click, tap, or even hover over individual words. If you hover for a couple of seconds, the word will become bold and cause the site to send a request to an AI model. If you wait a few more moments without selecting any words, the page’s text will fade out, and new content will appear.
-
-It’s all powered by the OpenAI API, which I’m using to dynamically generate or select new text. Because this is an experimental app, sometimes the AI responses may feel inconsistent or repetitive. That’s part of the fun—I’m continually tweaking the prompts and architecture to refine the experience.
-
-Please enjoy exploring, but keep in mind you’re using a “living” site. The words you click or hover on can guide the AI’s next output. Think of it as a conversation that unfolds in text form. Welcome, and have fun experimenting!
-				`),
+				NodeForContent(`Welcome to my website. I hope it will forever be a work in progress. There are links to my projects above.`),
 			),
 		),
 	)
@@ -137,6 +131,7 @@ func NavBar() *Node {
 				Li(A(Href("/shadowreddit"), T("ShadowReddit"))),
 				Li(A(Href("/story"), T("Story Generator"))),
 				Li(A(Href("/video"), T("Video Conference"))),
+				Li(A(Href("/robot"), T("Robot Control"))),
 			),
 		),
 	)
