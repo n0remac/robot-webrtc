@@ -185,7 +185,7 @@ function createPeerConnection(peerId) {
             }
             Logger.info('Local SDP:', pc.localDescription?.sdp);
             Logger.info('Remote SDP:', pc.remoteDescription?.sdp);
-            
+
             // flush any queued ICE candidates
             pc.queuedCandidates.forEach(c => pc.addIceCandidate(c));
             pc.queuedCandidates = [];
@@ -306,4 +306,15 @@ function start() {
     joinSession();
 }
 
-document.addEventListener("DOMContentLoaded", start);
+// document.addEventListener("DOMContentLoaded", start);
+
+document.addEventListener("DOMContentLoaded", () => {
+    bindkeys();
+    document.getElementById('start-video-btn').addEventListener('click', () => {
+        Logger.info('Start Video button clicked');
+        joinSession();
+        // Optionally, disable the button to prevent double start
+        document.getElementById('start-video-btn').disabled = true;
+        document.getElementById('start-video-btn').textContent = 'Connecting...';
+    });
+});

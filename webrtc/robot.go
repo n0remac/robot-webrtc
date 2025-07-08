@@ -11,8 +11,6 @@ func RobotControlHandler(w http.ResponseWriter, r *http.Request) {
 		Style(Raw(LoadFile("webrtc/video.css"))),
 		Script(Raw(LoadFile("webrtc/logger.js"))),
 		Script(Raw(LoadFile("webrtc/robot-control.js"))),
-		// Attr("hx-ext", "ws"),
-		// Attr("ws-connect", "/ws/hub?room=robot"),
 		Div(Attrs(map[string]string{
 			"class":      "flex flex-col items-center justify-center min-h-screen bg-black",
 			"data-theme": "dark",
@@ -20,6 +18,11 @@ func RobotControlHandler(w http.ResponseWriter, r *http.Request) {
 			// Video area
 			Div(
 				Id("video-area"), Class("mt-12 flex flex-col items-center space-y-4"),
+				Button(
+					Id("start-video-btn"),
+					Class("mb-4 px-6 py-2 bg-green-600 text-white rounded shadow hover:bg-green-700 transition"),
+					T("Start Video"),
+				),
 				Video(
 					Id("robot-video"),
 					Class("w-[640px] h-[480px] bg-[#111] rounded-lg border-2 border-[#333]"),
