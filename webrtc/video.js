@@ -124,8 +124,17 @@ function showLocalVideo() {
 }
 
 async function connectWebSocket() {
-    ws = new WebSocket((location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host + '/ws/hub');
-  
+   ws = new WebSocket(
+    (l    (location.protocol === 'https:' ? 'wss://' : 'ws://') +
+    location.host +
+    '/ws/hub?room=' + encodeURIComponent(ROOM) +
+    '&playerId=' + encodeURIComponent(myUUID)
+  );ocation.protocol === 'https:' ? 'wss://' : 'ws://') +
+    location.host +
+    '/ws/hub?room=' + encodeURIComponent(ROOM) +
+    '&playerId=' + encodeURIComponent(myUUID)
+  );
+
     ws.onopen = () => {
       Logger.info('WebSocket open');
       ws.send(JSON.stringify({
