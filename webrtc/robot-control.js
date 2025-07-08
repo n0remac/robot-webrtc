@@ -306,8 +306,6 @@ function start() {
     joinSession();
 }
 
-// document.addEventListener("DOMContentLoaded", start);
-
 document.addEventListener("DOMContentLoaded", () => {
     bindkeys();
     document.getElementById('start-video-btn').addEventListener('click', () => {
