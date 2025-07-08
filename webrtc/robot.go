@@ -105,10 +105,10 @@ func RobotControlHandler(w http.ResponseWriter, r *http.Request) {
 					),
 				),
 			),
-			Div(
-				Id("mobile-log"),
-				Class("fixed bottom-0 left-0 right-0 max-h-[30vh] overflow-y-auto bg-black bg-opacity-80 text-green-300 text-xs p-2 font-mono z-50"),
-			),
+			// Div(
+			// 	Id("mobile-log"),
+			// 	Class("fixed bottom-0 left-0 right-0 max-h-[30vh] overflow-y-auto bg-black bg-opacity-80 text-green-300 text-xs p-2 font-mono z-50"),
+			// ),
 		),
 	)
 
