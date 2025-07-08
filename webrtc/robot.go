@@ -21,7 +21,7 @@ func RobotControlHandler(w http.ResponseWriter, r *http.Request) {
 				Button(
 					Id("start-video-btn"),
 					Class("mb-4 px-6 py-2 bg-green-600 text-white rounded shadow hover:bg-green-700 transition"),
-					T("Start Video"),
+					T("Connect to Robot"),
 				),
 				Video(
 					Id("robot-video"),
