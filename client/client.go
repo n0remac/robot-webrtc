@@ -64,8 +64,12 @@ func Setup(server *string, room *string, motors []Motorer, myID string) {
 	// prepare static-RTP tracks
 	m := webrtc.MediaEngine{}
 	m.RegisterCodec(webrtc.RTPCodecParameters{
-		RTPCodecCapability: webrtc.RTPCodecCapability{MimeType: webrtc.MimeTypeH264, ClockRate: 90000, SDPFmtpLine: "packetization-mode=1;profile-level-id=42e01f"},
-		PayloadType:        109,
+		RTPCodecCapability: webrtc.RTPCodecCapability{
+			MimeType:    "video/H264",
+			ClockRate:   90000,
+			SDPFmtpLine: "packetization-mode=1;profile-level-id=42e01f",
+		},
+		PayloadType: 109,
 	}, webrtc.RTPCodecTypeVideo)
 	m.RegisterCodec(webrtc.RTPCodecParameters{
 		RTPCodecCapability: webrtc.RTPCodecCapability{MimeType: webrtc.MimeTypeOpus, ClockRate: 48000, Channels: 2},

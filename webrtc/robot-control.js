@@ -173,7 +173,12 @@ function createPeerConnection(peerId) {
             if (pc.ignoreOffer) return;
             if (collision) await pc.setLocalDescription({ type: 'rollback' });
     
-            await pc.setRemoteDescription(msg.offer);
+            try {
+              await pc.setRemoteDescription(msg.offer);
+              Logger.info('Set remote description OK');
+            } catch (e) {
+              Logger.error('Failed to set remote description', e);
+            }
             // flush any queued ICE candidates
             pc.queuedCandidates.forEach(c => pc.addIceCandidate(c));
             pc.queuedCandidates = [];
