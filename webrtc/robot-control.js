@@ -110,9 +110,13 @@ function createPeerConnection(peerId) {
     pc.queuedCandidates = [];
 
     pc.ontrack = ({ track, streams }) => {
+      Logger.info('Track received', { kind: track.kind, streams });
       const video = document.getElementById('robot-video');
       if (track.kind === 'video' && video) {
           video.srcObject = streams[0];
+          Logger.info('Set video.srcObject', video.srcObject);
+          video.onloadedmetadata = () => Logger.info('video loaded metadata');
+          video.onerror = (e) => Logger.error('video error', e);
       }
     };
   
@@ -179,6 +183,9 @@ function createPeerConnection(peerId) {
             } catch (e) {
               Logger.error('Failed to set remote description', e);
             }
+            Logger.info('Local SDP:', pc.localDescription?.sdp);
+            Logger.info('Remote SDP:', pc.remoteDescription?.sdp);
+            
             // flush any queued ICE candidates
             pc.queuedCandidates.forEach(c => pc.addIceCandidate(c));
             pc.queuedCandidates = [];
