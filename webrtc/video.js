@@ -384,8 +384,26 @@ function createPeerConnection(peerId) {
 }
 
 function generateUUID() {
-    return 'xxxx-xxxx-4xxx-yxxx-xxxxxx'.replace(/[xy]/g, function(c) {
-        const r = Math.random() * 16 | 0, v = c === 'x' ? r : (r & 0x3 | 0x8);
-        return v.toString(16);
-    });
+    // If available, use the browser's native randomUUID
+    if (window.crypto && window.crypto.randomUUID) {
+        return window.crypto.randomUUID();
+    }
+    // Otherwise, polyfill
+    const hex = [];
+    const rnds = new Uint8Array(16);
+    window.crypto.getRandomValues(rnds);
+    rnds[6] = (rnds[6] & 0x0f) | 0x40; // version 4
+    rnds[8] = (rnds[8] & 0x3f) | 0x80; // variant 10xx
+
+    for (let i = 0; i < 16; i++) {
+        hex.push(rnds[i].toString(16).padStart(2, '0'));
+    }
+    return [
+        hex.slice(0, 4).join(''),
+        hex.slice(4, 6).join(''),
+        hex.slice(6, 8).join(''),
+        hex.slice(8, 10).join(''),
+        hex.slice(10, 16).join('')
+    ].join('-');
 }
+

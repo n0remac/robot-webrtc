@@ -42,8 +42,11 @@ func VideoHandler(mux *http.ServeMux, registry *CommandRegistry) {
 	// Register signalling commands
 	registerSignallingCommands(registry)
 
-	// WebSocket endpoints
+	// Peer-to-peer mesh signaling (existing)
 	mux.HandleFunc("/ws/hub", CreateWebsocket(registry))
+
+	// SFU signaling endpoint (new)
+	mux.HandleFunc("/ws/sfu", SfuWebsocketHandler)
 }
 
 // registerSignallingCommands wires WebRTC commands into the Hub
@@ -130,26 +133,68 @@ func broadcastWebRTC(room string, msg Message) {
 
 // VideoPage renders the HTML layout for the video client
 func VideoPage(w http.ResponseWriter, r *http.Request) {
-	// Determine room from query or default
 	room := r.URL.Query().Get("room")
 	if room == "" {
 		room = "default"
 	}
 
+	mode := r.URL.Query().Get("mode")
+	jsFile := "video.js"
+	wsPath := "/ws/hub?room=" + room
+	if mode == "sfu" {
+		jsFile = "sfu.js"
+		wsPath = "/ws/sfu?room=" + room
+	}
+
 	page := DefaultLayout(
 		Style(Raw(LoadFile("webrtc/video.css"))),
 		Script(Raw(LoadFile("webrtc/logger.js"))),
-		Script(Raw(LoadFile("webrtc/video.js"))),
+		Script(Raw(LoadFile("webrtc/"+jsFile))),
 		Script(Raw(LoadFile("webrtc/media-controls.js"))),
 		Attr("hx-ext", "ws"),
-		Attr("ws-connect", "/ws/hub?room="+room),
+		Attr("ws-connect", wsPath),
 		Div(Attrs(map[string]string{
 			"class":      "flex flex-col items-center min-h-screen",
 			"data-theme": "dark",
 		}),
-			// Join screen with room selector and device tests
+			// ---- Mode select buttons ----
 			Div(
-				Id("join-screen"), Class("mt-24 flex flex-col items-center space-y-4"),
+				Id("mode-select"),
+				Class("mt-10 mb-6 flex flex-row gap-4"),
+				Button(
+					Id("mesh-mode-btn"),
+					Class("btn btn-xs px-4 py-2 "+ifThen(mode != "sfu", "bg-blue-600 text-white", "bg-gray-200 text-black")),
+					Attrs(map[string]string{
+						"type":    "button",
+						"onclick": "location.search = updateMode('mesh');",
+					}),
+					T("Mesh (P2P)"),
+				),
+				Button(
+					Id("sfu-mode-btn"),
+					Class("btn btn-xs px-4 py-2 "+ifThen(mode == "sfu", "bg-blue-600 text-white", "bg-gray-200 text-black")),
+					Attrs(map[string]string{
+						"type":    "button",
+						"onclick": "location.search = updateMode('sfu');",
+					}),
+					T("SFU (Multiplexed)"),
+				),
+				// mode selection helper JS
+				Raw(`<script>
+						function updateMode(mode) {
+						const params = new URLSearchParams(window.location.search);
+						if (mode === "mesh") {
+							params.delete("mode");
+						} else {
+							params.set("mode", mode);
+						}
+						return params.toString() ? "?" + params.toString() : "";
+						}
+					</script>`),
+			),
+			// ---- Join screen with room selector and device tests ----
+			Div(
+				Id("join-screen"), Class("mt-12 flex flex-col items-center space-y-4"),
 				Input(Attrs(map[string]string{
 					"type":        "text",
 					"id":          "name",
@@ -162,26 +207,21 @@ func VideoPage(w http.ResponseWriter, r *http.Request) {
 					"placeholder": room,
 					"class":       "border rounded px-2 py-1 w-64",
 				})),
-				// Device test buttons
 				Div(Class("space-x-2"),
 					Button(Id("test-camera"), Class("btn btn-sm"), T("Test Camera")),
 					Button(Id("test-mic"), Class("btn btn-sm"), T("Test Microphone")),
 				),
-				// Preview video element (hidden until camera test)
 				Raw(`<video id="preview-video" style="display:none; width:320px; height:240px; border:1px solid #444; border-radius:4px;" autoplay playsinline muted></video>`),
-				// Mic status display
 				Div(Id("mic-status"), Class("text-sm text-gray-300")),
-				// Join button
 				Button(Id("join-btn"), Class("btn mt-2 w-32"), T("Join")),
 			),
-			// Participant view remains unchanged
+			// ---- Participant view ----
 			Div(Id("participant-view"), Attr("style", "display:none;"), Class("mt-6"),
 				Div(Id("videos"), Class("relative grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4 w-full h-full p-4")),
 				Div(Id("controls"), Class("mt-5 space-x-4"),
 					Button(Id("mute-btn"), Class("btn btn-sm"), T("Mute")),
 					Button(Id("video-btn"), Class("btn btn-sm"), T("Stop Video")),
 					Button(Id("noise-btn"), Class("btn btn-sm"), T("Noise Suppression")),
-					Span(Id("w-status"), Class("text-sm text-gray-300"), T("W: up")),
 				),
 			),
 		),
@@ -190,6 +230,14 @@ func VideoPage(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/html")
 	w.WriteHeader(http.StatusOK)
 	w.Write([]byte(page.Render()))
+}
+
+// Helper to conditionally set classes (or just inline a ternary operator in Class())
+func ifThen(cond bool, a, b string) string {
+	if cond {
+		return a
+	}
+	return b
 }
 
 // handleTurnCredentials issues time‐limited TURN credentials

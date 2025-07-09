@@ -93,9 +93,9 @@ func Controls(
 		// 4 open claw, 5 turn claw , 6 lift claw, 14, pan camera, 15 tilt camera
 		switch m.Key {
 		// Servos:
-		case "r": // claw open
+		case "y": // claw open
 			rpcAct(4, +1)
-		case "y": // claw close
+		case "r": // claw close
 			rpcAct(4, -1)
 		case "t": // arm up
 			rpcAct(6, -1)
@@ -115,32 +115,6 @@ func Controls(
 			rpcAct(14, +1)
 
 		// Motors:
-		case "1":
-			if m.Action == "pressed" {
-				log.Println("1 pressed → motor1 forward")
-				m1.Forward(100)
-			} else {
-				log.Println("1 released → motor1 stop")
-				m1.Stop()
-			}
-		case "2":
-			if m.Action == "pressed" {
-				m2.Forward(100)
-			} else {
-				m2.Stop()
-			}
-		case "3":
-			if m.Action == "pressed" {
-				m3.Forward(100)
-			} else {
-				m3.Stop()
-			}
-		case "4":
-			if m.Action == "pressed" {
-				m4.Forward(100)
-			} else {
-				m4.Stop()
-			}
 		case "w":
 			if m.Action == "pressed" {
 				m1.Reverse(100)
