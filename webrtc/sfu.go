@@ -103,30 +103,7 @@ func SfuWebsocketHandler(w http.ResponseWriter, r *http.Request) {
 	}()
 
 	pc.OnSignalingStateChange(func(state webrtc.SignalingState) {
-		go func() {
-			myClient.restartMu.Lock()
-			defer myClient.restartMu.Unlock()
-			log.Printf("[SFU] Signaling state for %s: %s (needsNegotiation=%v)", myClient.id, state.String(), myClient.needsNegotiation)
-			if myClient.needsNegotiation && state == webrtc.SignalingStateStable {
-				myClient.needsNegotiation = false
-				offer, err := pc.CreateOffer(nil)
-				if err != nil {
-					log.Printf("[SFU] Queued CreateOffer failed for %s: %v", myClient.id, err)
-					return
-				}
-				if err := pc.SetLocalDescription(offer); err != nil {
-					log.Printf("[SFU] Queued SetLocalDescription failed for %s: %v", myClient.id, err)
-					return
-				}
-
-				myClient.send <- (map[string]interface{}{
-					"type":  "offer",
-					"offer": pc.LocalDescription(),
-				})
-
-				log.Printf("[SFU] Queued negotiation offer sent to %s", myClient.id)
-			}
-		}()
+		go triggerNegotiationIfStable(myClient)
 	})
 
 	// Register ICE event handlers for robustness
@@ -180,6 +157,7 @@ func SfuWebsocketHandler(w http.ResponseWriter, r *http.Request) {
 				continue
 			}
 			addSFUTrackToPeer(myClient, other, remote)
+			go triggerNegotiationIfStable(other)
 		}
 		sfuRoomHub.mu.Unlock()
 
@@ -234,45 +212,48 @@ func SfuWebsocketHandler(w http.ResponseWriter, r *http.Request) {
 		case "offer":
 			offer := decodeSDP(msg["offer"])
 			state := pc.SignalingState()
-			if state == webrtc.SignalingStateStable {
-				// Accept the offer as normal
-				if err := pc.SetRemoteDescription(offer); err != nil {
-					log.Println("SFU: SetRemoteDescription error:", err)
-					continue
+			if state != webrtc.SignalingStateStable {
+				// Rollback local description so we can accept the new offer
+				log.Printf("[SFU] In %s, rolling back before accepting new offer from %s", state, myClient.id)
+				if err := pc.SetLocalDescription(webrtc.SessionDescription{Type: webrtc.SDPTypeRollback}); err != nil {
+					log.Printf("SFU: Rollback failed: %v", err)
+					// If rollback fails, best effort: continue and try to set remote desc anyway
 				}
-				remoteDescSet = true
-				// Flush any queued candidates now that remote desc is set
-				candQueueMu.Lock()
-				for _, cand := range myClient.candQueue {
-					if err := pc.AddICECandidate(cand); err != nil {
-						log.Printf("SFU: Queued AddICECandidate error: %v", err)
-					}
-				}
-				myClient.candQueue = nil
-				candQueueMu.Unlock()
+			}
 
-				answer, err := pc.CreateAnswer(nil)
-				if err != nil {
-					log.Println("SFU: CreateAnswer error:", err)
-					continue
-				}
-				if err := pc.SetLocalDescription(answer); err != nil {
-					log.Println("SFU: SetLocalDescription error:", err)
-					continue
-				}
-				resp := map[string]interface{}{
-					"type":   "answer",
-					"answer": pc.LocalDescription(),
-				}
-				myClient.send <- resp
-				log.Printf("[SFU] Offer accepted and answered for %s", myClient.id)
-			} else {
-				// Not stable: cannot accept a new offer!
-				log.Printf("[SFU] In %s, cannot accept new offer from %s; must wait for answer. Skipping SetRemoteDescription and queueing negotiation.", state, myClient.id)
-				myClient.needsNegotiation = true
-				// Optionally: notify the sender or just continue silently
+			if err := pc.SetRemoteDescription(offer); err != nil {
+				log.Println("SFU: SetRemoteDescription error:", err)
 				continue
 			}
+			remoteDescSet = true
+			// Flush any queued candidates now that remote desc is set
+			candQueueMu.Lock()
+			for _, cand := range myClient.candQueue {
+				if err := pc.AddICECandidate(cand); err != nil {
+					log.Printf("SFU: Queued AddICECandidate error: %v", err)
+				}
+			}
+			myClient.candQueue = nil
+			candQueueMu.Unlock()
+
+			answer, err := pc.CreateAnswer(nil)
+			if err != nil {
+				log.Println("SFU: CreateAnswer error:", err)
+				continue
+			}
+			if err := pc.SetLocalDescription(answer); err != nil {
+				log.Println("SFU: SetLocalDescription error:", err)
+				continue
+			}
+			resp := map[string]interface{}{
+				"type":   "answer",
+				"answer": pc.LocalDescription(),
+			}
+			myClient.send <- resp
+			log.Printf("[SFU] Offer accepted and answered for %s", myClient.id)
+
+			// After sending answer, attempt negotiation if anything is queued
+			go triggerNegotiationIfStable(myClient)
 		case "answer":
 			log.Printf("[SFU] Got answer from %s, state before: %s", myClient.id, pc.SignalingState())
 			ans := decodeSDP(msg["answer"])
@@ -281,28 +262,20 @@ func SfuWebsocketHandler(w http.ResponseWriter, r *http.Request) {
 				continue
 			}
 			log.Printf("[SFU] Applied answer for %s, state now: %s", myClient.id, pc.SignalingState())
-			// <--- ADD THIS BLOCK:
-			myClient.restartMu.Lock()
-			if myClient.needsNegotiation && pc.SignalingState() == webrtc.SignalingStateStable {
-				myClient.needsNegotiation = false
-				offer, err := pc.CreateOffer(nil)
-				if err != nil {
-					log.Printf("[SFU] Queued CreateOffer failed for %s: %v", myClient.id, err)
-					myClient.restartMu.Unlock()
-					continue
+
+			// Optionally flush candidates here, if you have any buffered (unlikely, but safe):
+			candQueueMu.Lock()
+			for _, cand := range myClient.candQueue {
+				if err := pc.AddICECandidate(cand); err != nil {
+					log.Printf("SFU: Queued AddICECandidate error: %v", err)
 				}
-				if err := pc.SetLocalDescription(offer); err != nil {
-					log.Printf("[SFU] Queued SetLocalDescription failed for %s: %v", myClient.id, err)
-					myClient.restartMu.Unlock()
-					continue
-				}
-				myClient.send <- map[string]interface{}{
-					"type":  "offer",
-					"offer": pc.LocalDescription(),
-				}
-				log.Printf("[SFU] Queued negotiation offer sent to %s (from answer branch)", myClient.id)
 			}
-			myClient.restartMu.Unlock()
+			myClient.candQueue = nil
+			candQueueMu.Unlock()
+
+			// After answer, check for queued negotiation
+			go triggerNegotiationIfStable(myClient)
+
 		case "candidate":
 			cand := decodeICE(msg["candidate"])
 			if !remoteDescSet || pc.RemoteDescription() == nil {
@@ -330,9 +303,7 @@ func SfuWebsocketHandler(w http.ResponseWriter, r *http.Request) {
 	close(myClient.send)
 }
 
-// Helper: add remote track to other's PeerConnection as local, with negotiation handling
 func addSFUTrackToPeer(from *sfuClient, to *sfuClient, remote *webrtc.TrackRemote) {
-	// Avoid locking sfuRoomHub while calling AddTrack (may deadlock)
 	to.restartMu.Lock()
 	defer to.restartMu.Unlock()
 
@@ -347,25 +318,25 @@ func addSFUTrackToPeer(from *sfuClient, to *sfuClient, remote *webrtc.TrackRemot
 		return
 	}
 	to.localTracks[remote.ID()] = lt
+	to.needsNegotiation = true
+}
 
-	// Negotiate if in stable state, queue otherwise (simple approach)
-	if to.pc.SignalingState() == webrtc.SignalingStateStable {
-		offer, err := to.pc.CreateOffer(nil)
+func triggerNegotiationIfStable(c *sfuClient) {
+	c.restartMu.Lock()
+	defer c.restartMu.Unlock()
+	if c.needsNegotiation && c.pc.SignalingState() == webrtc.SignalingStateStable {
+		c.needsNegotiation = false
+		offer, err := c.pc.CreateOffer(nil)
 		if err != nil {
 			log.Printf("[SFU] CreateOffer failed: %v", err)
 			return
 		}
-		if err := to.pc.SetLocalDescription(offer); err != nil {
+		if err := c.pc.SetLocalDescription(offer); err != nil {
 			log.Printf("[SFU] SetLocalDescription failed: %v", err)
 			return
 		}
-		to.send <- map[string]interface{}{
-			"type":  "offer",
-			"offer": to.pc.LocalDescription(),
-		}
-	} else {
-		log.Printf("[SFU] Not negotiating for %s, state: %s", to.id, to.pc.SignalingState())
-		to.needsNegotiation = true
+		c.send <- map[string]interface{}{"type": "offer", "offer": c.pc.LocalDescription()}
+		log.Printf("[SFU] Negotiation offer sent to %s", c.id)
 	}
 }
 
