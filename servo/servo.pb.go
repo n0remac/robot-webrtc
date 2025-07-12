@@ -229,11 +229,143 @@ func (x *StopReply) GetErr() string {
 	return ""
 }
 
+type GetAnglesRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *GetAnglesRequest) Reset() {
+	*x = GetAnglesRequest{}
+	mi := &file_servo_proto_msgTypes[4]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *GetAnglesRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*GetAnglesRequest) ProtoMessage() {}
+
+func (x *GetAnglesRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_servo_proto_msgTypes[4]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use GetAnglesRequest.ProtoReflect.Descriptor instead.
+func (*GetAnglesRequest) Descriptor() ([]byte, []int) {
+	return file_servo_proto_rawDescGZIP(), []int{4}
+}
+
+type ServoAngle struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Channel       int32                  `protobuf:"varint,1,opt,name=channel,proto3" json:"channel,omitempty"`
+	Angle         float32                `protobuf:"fixed32,2,opt,name=angle,proto3" json:"angle,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ServoAngle) Reset() {
+	*x = ServoAngle{}
+	mi := &file_servo_proto_msgTypes[5]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ServoAngle) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ServoAngle) ProtoMessage() {}
+
+func (x *ServoAngle) ProtoReflect() protoreflect.Message {
+	mi := &file_servo_proto_msgTypes[5]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ServoAngle.ProtoReflect.Descriptor instead.
+func (*ServoAngle) Descriptor() ([]byte, []int) {
+	return file_servo_proto_rawDescGZIP(), []int{5}
+}
+
+func (x *ServoAngle) GetChannel() int32 {
+	if x != nil {
+		return x.Channel
+	}
+	return 0
+}
+
+func (x *ServoAngle) GetAngle() float32 {
+	if x != nil {
+		return x.Angle
+	}
+	return 0
+}
+
+type GetAnglesReply struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Angles        []*ServoAngle          `protobuf:"bytes,1,rep,name=angles,proto3" json:"angles,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *GetAnglesReply) Reset() {
+	*x = GetAnglesReply{}
+	mi := &file_servo_proto_msgTypes[6]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *GetAnglesReply) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*GetAnglesReply) ProtoMessage() {}
+
+func (x *GetAnglesReply) ProtoReflect() protoreflect.Message {
+	mi := &file_servo_proto_msgTypes[6]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use GetAnglesReply.ProtoReflect.Descriptor instead.
+func (*GetAnglesReply) Descriptor() ([]byte, []int) {
+	return file_servo_proto_rawDescGZIP(), []int{6}
+}
+
+func (x *GetAnglesReply) GetAngles() []*ServoAngle {
+	if x != nil {
+		return x.Angles
+	}
+	return nil
+}
+
 var File_servo_proto protoreflect.FileDescriptor
 
 const file_servo_proto_rawDesc = "" +
 	"\n" +
-	"\vservo.proto\x12\x04main\"[\n" +
+	"\vservo.proto\x12\x05servo\"[\n" +
 	"\vMoveRequest\x12\x18\n" +
 	"\achannel\x18\x01 \x01(\x05R\achannel\x12\x1c\n" +
 	"\tdirection\x18\x02 \x01(\x05R\tdirection\x12\x14\n" +
@@ -245,11 +377,19 @@ const file_servo_proto_rawDesc = "" +
 	"\achannel\x18\x01 \x01(\x05R\achannel\"-\n" +
 	"\tStopReply\x12\x0e\n" +
 	"\x02ok\x18\x01 \x01(\bR\x02ok\x12\x10\n" +
-	"\x03err\x18\x02 \x01(\tR\x03err2d\n" +
+	"\x03err\x18\x02 \x01(\tR\x03err\"\x12\n" +
+	"\x10GetAnglesRequest\"<\n" +
 	"\n" +
-	"Controller\x12*\n" +
-	"\x04Move\x12\x11.main.MoveRequest\x1a\x0f.main.MoveReply\x12*\n" +
-	"\x04Stop\x12\x11.main.StopRequest\x1a\x0f.main.StopReplyB\x1aZ\x18robot-webrtc/servo;servob\x06proto3"
+	"ServoAngle\x12\x18\n" +
+	"\achannel\x18\x01 \x01(\x05R\achannel\x12\x14\n" +
+	"\x05angle\x18\x02 \x01(\x02R\x05angle\";\n" +
+	"\x0eGetAnglesReply\x12)\n" +
+	"\x06angles\x18\x01 \x03(\v2\x11.servo.ServoAngleR\x06angles2\xa5\x01\n" +
+	"\n" +
+	"Controller\x12,\n" +
+	"\x04Move\x12\x12.servo.MoveRequest\x1a\x10.servo.MoveReply\x12,\n" +
+	"\x04Stop\x12\x12.servo.StopRequest\x1a\x10.servo.StopReply\x12;\n" +
+	"\tGetAngles\x12\x17.servo.GetAnglesRequest\x1a\x15.servo.GetAnglesReplyB-Z+github.com/n0remac/robot-webrtc/servo;servob\x06proto3"
 
 var (
 	file_servo_proto_rawDescOnce sync.Once
@@ -263,23 +403,29 @@ func file_servo_proto_rawDescGZIP() []byte {
 	return file_servo_proto_rawDescData
 }
 
-var file_servo_proto_msgTypes = make([]protoimpl.MessageInfo, 4)
+var file_servo_proto_msgTypes = make([]protoimpl.MessageInfo, 7)
 var file_servo_proto_goTypes = []any{
-	(*MoveRequest)(nil), // 0: main.MoveRequest
-	(*MoveReply)(nil),   // 1: main.MoveReply
-	(*StopRequest)(nil), // 2: main.StopRequest
-	(*StopReply)(nil),   // 3: main.StopReply
+	(*MoveRequest)(nil),      // 0: servo.MoveRequest
+	(*MoveReply)(nil),        // 1: servo.MoveReply
+	(*StopRequest)(nil),      // 2: servo.StopRequest
+	(*StopReply)(nil),        // 3: servo.StopReply
+	(*GetAnglesRequest)(nil), // 4: servo.GetAnglesRequest
+	(*ServoAngle)(nil),       // 5: servo.ServoAngle
+	(*GetAnglesReply)(nil),   // 6: servo.GetAnglesReply
 }
 var file_servo_proto_depIdxs = []int32{
-	0, // 0: main.Controller.Move:input_type -> main.MoveRequest
-	2, // 1: main.Controller.Stop:input_type -> main.StopRequest
-	1, // 2: main.Controller.Move:output_type -> main.MoveReply
-	3, // 3: main.Controller.Stop:output_type -> main.StopReply
-	2, // [2:4] is the sub-list for method output_type
-	0, // [0:2] is the sub-list for method input_type
-	0, // [0:0] is the sub-list for extension type_name
-	0, // [0:0] is the sub-list for extension extendee
-	0, // [0:0] is the sub-list for field type_name
+	5, // 0: servo.GetAnglesReply.angles:type_name -> servo.ServoAngle
+	0, // 1: servo.Controller.Move:input_type -> servo.MoveRequest
+	2, // 2: servo.Controller.Stop:input_type -> servo.StopRequest
+	4, // 3: servo.Controller.GetAngles:input_type -> servo.GetAnglesRequest
+	1, // 4: servo.Controller.Move:output_type -> servo.MoveReply
+	3, // 5: servo.Controller.Stop:output_type -> servo.StopReply
+	6, // 6: servo.Controller.GetAngles:output_type -> servo.GetAnglesReply
+	4, // [4:7] is the sub-list for method output_type
+	1, // [1:4] is the sub-list for method input_type
+	1, // [1:1] is the sub-list for extension type_name
+	1, // [1:1] is the sub-list for extension extendee
+	0, // [0:1] is the sub-list for field type_name
 }
 
 func init() { file_servo_proto_init() }
@@ -293,7 +439,7 @@ func file_servo_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_servo_proto_rawDesc), len(file_servo_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   4,
+			NumMessages:   7,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

@@ -7,6 +7,7 @@ option go_package = "github.com/n0remac/robot-webrtc/servo;servo";
 service Controller {
   rpc Move(MoveRequest) returns (MoveReply);
   rpc Stop(StopRequest) returns (StopReply);
+  rpc GetAngles(GetAnglesRequest) returns (GetAnglesReply);
 }
 
 message MoveRequest {
@@ -17,3 +18,7 @@ message MoveRequest {
 message MoveReply { bool ok = 1; string err = 2; }
 message StopRequest { int32 channel = 1; }
 message StopReply  { bool ok = 1; string err = 2; }
+
+message GetAnglesRequest {}
+message ServoAngle { int32 channel = 1; float angle = 2; }
+message GetAnglesReply { repeated ServoAngle angles = 1; }

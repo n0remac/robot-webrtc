@@ -19,8 +19,9 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	Controller_Move_FullMethodName = "/main.Controller/Move"
-	Controller_Stop_FullMethodName = "/main.Controller/Stop"
+	Controller_Move_FullMethodName      = "/servo.Controller/Move"
+	Controller_Stop_FullMethodName      = "/servo.Controller/Stop"
+	Controller_GetAngles_FullMethodName = "/servo.Controller/GetAngles"
 )
 
 // ControllerClient is the client API for Controller service.
@@ -29,6 +30,7 @@ const (
 type ControllerClient interface {
 	Move(ctx context.Context, in *MoveRequest, opts ...grpc.CallOption) (*MoveReply, error)
 	Stop(ctx context.Context, in *StopRequest, opts ...grpc.CallOption) (*StopReply, error)
+	GetAngles(ctx context.Context, in *GetAnglesRequest, opts ...grpc.CallOption) (*GetAnglesReply, error)
 }
 
 type controllerClient struct {
@@ -59,12 +61,23 @@ func (c *controllerClient) Stop(ctx context.Context, in *StopRequest, opts ...gr
 	return out, nil
 }
 
+func (c *controllerClient) GetAngles(ctx context.Context, in *GetAnglesRequest, opts ...grpc.CallOption) (*GetAnglesReply, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(GetAnglesReply)
+	err := c.cc.Invoke(ctx, Controller_GetAngles_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // ControllerServer is the server API for Controller service.
 // All implementations must embed UnimplementedControllerServer
 // for forward compatibility.
 type ControllerServer interface {
 	Move(context.Context, *MoveRequest) (*MoveReply, error)
 	Stop(context.Context, *StopRequest) (*StopReply, error)
+	GetAngles(context.Context, *GetAnglesRequest) (*GetAnglesReply, error)
 	mustEmbedUnimplementedControllerServer()
 }
 
@@ -80,6 +93,9 @@ func (UnimplementedControllerServer) Move(context.Context, *MoveRequest) (*MoveR
 }
 func (UnimplementedControllerServer) Stop(context.Context, *StopRequest) (*StopReply, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method Stop not implemented")
+}
+func (UnimplementedControllerServer) GetAngles(context.Context, *GetAnglesRequest) (*GetAnglesReply, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method GetAngles not implemented")
 }
 func (UnimplementedControllerServer) mustEmbedUnimplementedControllerServer() {}
 func (UnimplementedControllerServer) testEmbeddedByValue()                    {}
@@ -138,11 +154,29 @@ func _Controller_Stop_Handler(srv interface{}, ctx context.Context, dec func(int
 	return interceptor(ctx, in, info, handler)
 }
 
+func _Controller_GetAngles_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetAnglesRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ControllerServer).GetAngles(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: Controller_GetAngles_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ControllerServer).GetAngles(ctx, req.(*GetAnglesRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // Controller_ServiceDesc is the grpc.ServiceDesc for Controller service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
 var Controller_ServiceDesc = grpc.ServiceDesc{
-	ServiceName: "main.Controller",
+	ServiceName: "servo.Controller",
 	HandlerType: (*ControllerServer)(nil),
 	Methods: []grpc.MethodDesc{
 		{
@@ -152,6 +186,10 @@ var Controller_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "Stop",
 			Handler:    _Controller_Stop_Handler,
+		},
+		{
+			MethodName: "GetAngles",
+			Handler:    _Controller_GetAngles_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

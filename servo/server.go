@@ -12,19 +12,37 @@ import (
 	"periph.io/x/devices/v3/pca9685"
 )
 
+type ServoConfig struct {
+	Min   float64
+	Max   float64
+	Angle float64
+}
+
 type server struct {
 	UnimplementedControllerServer
 	pca     *pca9685.ServoGroup
 	moverMu sync.Mutex
 	movers  map[int]chan struct{}
-	angles  map[int]float64
+	servos  map[int]*ServoConfig
 }
 
-func NewServer(sg *pca9685.ServoGroup) *server {
+func NewServer(sg *pca9685.ServoGroup, servoRanges map[int][2]float64) *server {
+	servos := make(map[int]*ServoConfig)
+	for ch, rng := range servoRanges {
+		mid := (rng[0] + rng[1]) / 2
+		servos[ch] = &ServoConfig{
+			Min:   rng[0],
+			Max:   rng[1],
+			Angle: mid,
+		}
+		// Set physical servo to mid
+		servo := sg.GetServo(ch)
+		servo.SetAngle(physic.Angle(mid))
+	}
 	return &server{
 		pca:    sg,
 		movers: make(map[int]chan struct{}),
-		angles: make(map[int]float64),
+		servos: servos,
 	}
 }
 
@@ -39,15 +57,17 @@ func (s *server) Move(ctx context.Context, req *MoveRequest) (*MoveReply, error)
 	}
 
 	s.moverMu.Lock()
+	cfg, exists := s.servos[ch]
+	if !exists {
+		s.moverMu.Unlock()
+		return &MoveReply{Ok: false, Err: "invalid servo channel"}, nil
+	}
 	if _, busy := s.movers[ch]; busy {
 		s.moverMu.Unlock()
 		return &MoveReply{Ok: false, Err: "already moving"}, nil
 	}
 	stop := make(chan struct{})
 	s.movers[ch] = stop
-	if _, ok := s.angles[ch]; !ok {
-		s.angles[ch] = 90
-	}
 	s.moverMu.Unlock()
 
 	go func() {
@@ -59,19 +79,18 @@ func (s *server) Move(ctx context.Context, req *MoveRequest) (*MoveReply, error)
 				return
 			case <-ticker.C:
 				s.moverMu.Lock()
-				ang := s.angles[ch] + float64(dir)*speed*0.05
-				if ang > 180 {
-					ang = 180
+				newAng := cfg.Angle + float64(dir)*speed*0.05
+				if newAng > cfg.Max {
+					newAng = cfg.Max
 				}
-				if ang < 0 {
-					ang = 0
+				if newAng < cfg.Min {
+					newAng = cfg.Min
 				}
-				s.angles[ch] = ang
+				cfg.Angle = newAng
 				s.moverMu.Unlock()
-
 				// set the hardware
 				servo := s.pca.GetServo(ch)
-				if err := servo.SetAngle(physic.Angle(ang)); err != nil {
+				if err := servo.SetAngle(physic.Angle(newAng)); err != nil {
 					log.Printf("servo %d set angle error: %v", ch, err)
 				}
 			}
@@ -90,4 +109,17 @@ func (s *server) Stop(ctx context.Context, req *StopRequest) (*StopReply, error)
 	}
 	s.moverMu.Unlock()
 	return &StopReply{Ok: true}, nil
+}
+
+func (s *server) GetAngles(ctx context.Context, req *GetAnglesRequest) (*GetAnglesReply, error) {
+	s.moverMu.Lock()
+	defer s.moverMu.Unlock()
+	var result []*ServoAngle
+	for ch, cfg := range s.servos {
+		result = append(result, &ServoAngle{
+			Channel: int32(ch),
+			Angle:   float32(cfg.Angle),
+		})
+	}
+	return &GetAnglesReply{Angles: result}, nil
 }

@@ -105,10 +105,12 @@ func RobotControlHandler(w http.ResponseWriter, r *http.Request) {
 					),
 				),
 			),
-			// Div(
-			// 	Id("mobile-log"),
-			// 	Class("fixed bottom-0 left-0 right-0 max-h-[30vh] overflow-y-auto bg-black bg-opacity-80 text-green-300 text-xs p-2 font-mono z-50"),
-			// ),
+			Div(
+				Id("servo-angles"),
+				Class("mt-8 bg-gray-900 p-4 rounded-lg shadow text-green-200"),
+				T("Servo Angles:"),
+				Ul(Id("servo-angle-list")),
+			),
 		),
 	)
 

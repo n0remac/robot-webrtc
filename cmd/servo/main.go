@@ -19,6 +19,14 @@ import (
 
 type nopBus struct{}
 
+var defaultServoRanges = map[int][2]float64{
+	4:  {0, 180}, // Claw open/close
+	5:  {0, 180}, // Claw rotation
+	6:  {0, 180}, // Arm lift
+	14: {0, 180}, // Camera pan
+	15: {0, 180}, // Camera tilt
+}
+
 func (nopBus) Tx(addr uint16, w, r []byte) error  { return nil }
 func (nopBus) Close() error                       { return nil }
 func (nopBus) SetSpeed(hz physic.Frequency) error { return nil }
@@ -33,7 +41,7 @@ func main() {
 		log.Fatalf("net.Listen: %v", err)
 	}
 	srv := grpc.NewServer()
-	pb.RegisterControllerServer(srv, pb.NewServer(sg))
+	pb.RegisterControllerServer(srv, pb.NewServer(sg, defaultServoRanges))
 	log.Println("servo gRPC listening on :50051")
 	srv.Serve(lis)
 }

@@ -372,3 +372,15 @@ window.addEventListener('DOMContentLoaded', () => {
     });
 });
 
+async function fetchAngles() {
+    // Example: adjust URL and data shape to match your backend
+    const resp = await fetch('/api/servo-angles');
+    if (!resp.ok) return;
+    const data = await resp.json(); // [{channel:4,angle:93.2},...]
+    let html = '';
+    for (const servo of data) {
+        html += `<li>Servo ${servo.channel}: <span class="angle">${servo.angle.toFixed(1)}</span>°</li>`;
+    }
+    document.getElementById('servo-angle-list').innerHTML = html;
+}
+setInterval(fetchAngles, 400);
