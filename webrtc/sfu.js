@@ -52,12 +52,23 @@ async function joinSFUSession() {
 async function fetchTurnCredentials() {
     try {
         const res = await fetch('/turn-credentials');
-        return res.ok ? res.json() : null;
+        if (!res.ok) {
+            console.error('Failed to fetch turn credentials:', res.status, res.statusText);
+            return null;
+        }
+        const text = await res.text();
+        try {
+            return JSON.parse(text);
+        } catch (err) {
+            console.error('Turn credentials are not JSON:', text);
+            return null;
+        }
     } catch (e) {
-        Logger.error('TURN fetch failed', e);
+        console.error('Error fetching turn credentials:', e);
         return null;
     }
 }
+
 
 function setupIceServers(turnData) {
     globalIceServers = [
