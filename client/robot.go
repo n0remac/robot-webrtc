@@ -167,39 +167,7 @@ func Controls(
 	}
 }
 
-func RunFFmpegCLI(input, format string, fps int, size, output string, outArgs map[string]string) {
-	// start with global flags
-	args := []string{
-		"-hide_banner",
-		"-loglevel", "warning",
-		"-f", format,
-	}
-	// video-specific options
-	if fps > 0 {
-		args = append(args,
-			"-framerate", fmt.Sprint(fps),
-			"-video_size", size,
-		)
-	}
-	// specify input
-	args = append(args, "-i", input)
-
-	// append output options
-	for flag, val := range outArgs {
-		// ensure leading dash(s)
-		f := flag
-		if !strings.HasPrefix(f, "-") {
-			f = "-" + f
-		}
-		args = append(args, f)
-		if val != "" {
-			args = append(args, val)
-		}
-	}
-
-	// finally the output destination
-	args = append(args, output)
-
+func RunFFmpegCLI(args []string) {
 	log.Printf("running ffmpeg %v", args)
 	cmd := exec.Command("ffmpeg", args...)
 	cmd.Stdout = os.Stdout
@@ -208,6 +176,7 @@ func RunFFmpegCLI(input, format string, fps int, size, output string, outArgs ma
 		log.Fatalf("ffmpeg failed: %v", err)
 	}
 }
+
 
 // runFFmpegFileCLI streams a local file at realtime speed (-re) into a single RTP output URL.
 func RunFFmpegFileCLI(inputFile, output string, outArgs map[string]string) {

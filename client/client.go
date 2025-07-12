@@ -121,35 +121,34 @@ func Setup(server *string, room *string, motors []Motorer, myID string) {
 	}()
 
 	// start FFmpeg push
-	go RunFFmpegCLI(
-		"/dev/video0", "v4l2", 30, "640x480",
+	go RunFFmpegCLI([]string{
+		"-hide_banner", "-loglevel", "warning",
+		"-f", "v4l2",
+		"-framerate", "30",
+		"-video_size", "640x480",
+		"-i", "/dev/video0",
+		"-vf", "hflip,vflip",
+		"-c:v", "libx264",
+		"-preset", "ultrafast",
+		"-tune", "zerolatency",
+		"-pix_fmt", "yuv420p",
+		"-an",
+		"-f", "rtp",
+		"-payload_type", "109",
 		"rtp://127.0.0.1:5004",
-		map[string]string{
-			"vf":           "hflip,vflip",
-			"c:v":          "libx264",
-			"preset":       "ultrafast",
-			"tune":         "zerolatency",
-			"pix_fmt":      "yuv420p",
-			"an":           "",
-			"f":            "rtp",
-			"payload_type": "109",
-		},
-	)
+	})
 
-	go RunFFmpegCLI(
-		"hw:1,0", // input device string for USB mic
-		"alsa",   // audio input type for ffmpeg
-		48000,    // sample rate (no frame rate for audio)
-		"1",      // channels (or "1" if mono)
+	go RunFFmpegCLI([]string{
+		"-hide_banner", "-loglevel", "warning",
+		"-f", "alsa",
+		"-ar", "48000",
+		"-ac", "1",
+		"-i", "hw:1,0",
+		"-acodec", "libopus",
+		"-f", "rtp",
+		"-payload_type", "111",
 		"rtp://127.0.0.1:5006",
-		map[string]string{
-			"acodec":       "libopus",
-			"ar":           "48000",
-			"ac":           "1", // or "1" for mono
-			"f":            "rtp",
-			"payload_type": "111",
-		},
-	)
+	})
 
 	<-sigCh
 	log.Println("Shutting down: sending leave & closing peers...")
