@@ -129,6 +129,8 @@ function createPeerConnection(peerId) {
         video.play();
     };
 
+
+  
     pc.onnegotiationneeded = async () => {
       if (negotiating) return;
       negotiating = true;
@@ -297,7 +299,7 @@ function bindkeys() {
       'w','a','s','d', 
       't', 'f', 'g', 'h',
       'i', 'j', 'k', 'l',
-      'r', 'y', '1', '2'
+      'r', 'y',
     ].forEach(k =>
       createKeyPressEventListener(k)
     );
