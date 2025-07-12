@@ -3,7 +3,6 @@ package client
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	"log"
 	"os"
 	"os/exec"
@@ -176,7 +175,6 @@ func RunFFmpegCLI(args []string) {
 		log.Fatalf("ffmpeg failed: %v", err)
 	}
 }
-
 
 // runFFmpegFileCLI streams a local file at realtime speed (-re) into a single RTP output URL.
 func RunFFmpegFileCLI(inputFile, output string, outArgs map[string]string) {
