@@ -110,20 +110,34 @@ function createPeerConnection(peerId) {
     pc.queuedCandidates = [];
 
     pc.ontrack = ({ track, streams }) => {
-      Logger.info('Track received', { kind: track.kind, streams });
-      const video = document.getElementById('robot-video');
-      if (track.kind === 'video' && video) {
-          video.srcObject = streams[0];
-          Logger.info('Set video.srcObject', video.srcObject);
-          video.onloadedmetadata = () => {
-              Logger.info('video loaded metadata');
-              // Remove the connect button here!
-              const btn = document.getElementById('start-video-btn');
-              if (btn) btn.remove();
-          };
-          video.onerror = (e) => Logger.error('video error', e);
-      }
+        Logger.info('Track received', { kind: track.kind, streams });
+
+        // Attach any incoming stream that has audio or video tracks
+        const video = document.getElementById('robot-video');
+        if (!video) return;
+
+        // If video element already has srcObject, and the new stream is different, merge tracks
+        if (video.srcObject) {
+            // Get the existing and incoming streams
+            const oldStream = video.srcObject;
+            const newStream = streams[0];
+
+            // If newStream is not already set, or is different, merge
+            if (oldStream !== newStream) {
+                // Option 1: Replace srcObject (safe if robot always bundles video+audio in one stream)
+                video.srcObject = newStream;
+            }
+            // Option 2: If you expect separate streams, you may need to manually add tracks to a single MediaStream
+            // Not covered here unless you confirm this is your scenario.
+        } else {
+            video.srcObject = streams[0];
+        }
+
+        // Make sure video is not muted and is playing!
+        video.muted = false;
+        video.play();
     };
+
   
     pc.onnegotiationneeded = async () => {
       if (negotiating) return;
