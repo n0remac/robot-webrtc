@@ -47,12 +47,6 @@ var (
 )
 
 func Notecard(mux *http.ServeMux, registry *CommandRegistry) {
-	// docs := db.NewSqliteDocumentStore("data/docs.db")
-	// deps := &deps.Deps{
-	// 	DB:   db.LoadDB("sqlite://data/db.sqlite"),
-	// 	Docs: docs,
-	// }
-
 	registerVoting(mux, registry)
 	apiKey := os.Getenv("OPENAI_API_KEY")
 	if apiKey == "" {
