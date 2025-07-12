@@ -20,11 +20,11 @@ import (
 type nopBus struct{}
 
 var defaultServoRanges = map[int][2]float64{
-	4:  {0, 180}, // Claw open/close
-	5:  {0, 180}, // Claw rotation
-	6:  {0, 180}, // Arm lift
-	14: {0, 180}, // Camera pan
-	15: {0, 180}, // Camera tilt
+	4:  {15, 140}, // Claw open/close
+	5:  {15, 140}, // Claw rotation
+	6:  {15, 140}, // Arm lift
+	14: {15, 140}, // Camera pan
+	15: {15, 140}, // Camera tilt
 }
 
 func (nopBus) Tx(addr uint16, w, r []byte) error  { return nil }
