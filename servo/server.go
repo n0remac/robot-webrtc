@@ -30,6 +30,7 @@ func NewServer(sg *pca9685.ServoGroup, servoRanges map[int][2]float64) *server {
 	servos := make(map[int]*ServoConfig)
 	for ch, rng := range servoRanges {
 		mid := (rng[0] + rng[1]) / 2
+		fmt.Println("rng:", rng[0], rng[1], "mid:", mid)
 		servos[ch] = &ServoConfig{
 			Min:   rng[0],
 			Max:   rng[1],
@@ -87,6 +88,7 @@ func (s *server) Move(ctx context.Context, req *MoveRequest) (*MoveReply, error)
 					newAng = cfg.Min
 				}
 				cfg.Angle = newAng
+				fmt.Println("Setting servo", ch, "to angle", newAng)
 				s.moverMu.Unlock()
 				// set the hardware
 				servo := s.pca.GetServo(ch)
