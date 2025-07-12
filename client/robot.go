@@ -162,6 +162,10 @@ func Controls(
 				m2.Stop()
 				m4.Stop()
 			}
+		case "1":
+			HighStream.Start()
+		case "2":
+			LowStream.Start()
 		}
 	}
 }
