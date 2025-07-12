@@ -136,6 +136,21 @@ func Setup(server *string, room *string, motors []Motorer, myID string) {
 		},
 	)
 
+	go RunFFmpegCLI(
+		"hw:1,0", // input device string for USB mic
+		"alsa",   // audio input type for ffmpeg
+		48000,    // sample rate (no frame rate for audio)
+		"2",      // channels (or "1" if mono)
+		"rtp://127.0.0.1:5006",
+		map[string]string{
+			"acodec":       "libopus",
+			"ar":           "48000",
+			"ac":           "2", // or "1" for mono
+			"f":            "rtp",
+			"payload_type": "111",
+		},
+	)
+
 	<-sigCh
 	log.Println("Shutting down: sending leave & closing peers...")
 	PeersMu.Lock()
