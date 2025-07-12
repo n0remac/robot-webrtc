@@ -53,22 +53,68 @@ const Logger = (() => {
 })();
 
 function logToPage(...args) {
-    let el = document.getElementById('mobile-log');
-    if (!el) {
-        el = document.createElement('div');
-        el.id = 'mobile-log';
-        el.style = 'position:fixed;bottom:0;left:0;right:0;max-height:30vh;overflow:auto;background:rgba(0,0,0,0.85);color:#00FF66;font:12px monospace;z-index:9999;padding:4px;';
-        document.body.appendChild(el);
+    let wrapper = document.getElementById('mobile-log-wrapper');
+    let logEl = document.getElementById('mobile-log');
+
+    if (!wrapper) {
+        // Create wrapper div
+        wrapper = document.createElement('div');
+        wrapper.id = 'mobile-log-wrapper';
+        wrapper.style = `
+            position:fixed;left:0;right:0;bottom:0;
+            z-index:9999;font-family:monospace;
+            pointer-events:none; /* only enable on children */
+        `;
+
+        // Toggle button
+        const toggleBtn = document.createElement('button');
+        toggleBtn.id = 'mobile-log-toggle';
+        toggleBtn.textContent = 'Show Logs';
+        toggleBtn.style = `
+            width:100%;background:#111;color:#00FF66;
+            font:14px monospace;border:none;padding:8px 0;
+            border-top:1px solid #333;cursor:pointer;
+            pointer-events:auto;
+        `;
+
+        // Log content
+        logEl = document.createElement('div');
+        logEl.id = 'mobile-log';
+        logEl.style = `
+            display:none;
+            background:rgba(0,0,0,0.92);
+            color:#00FF66;
+            font:12px monospace;
+            max-height:30vh;
+            overflow-y:auto;
+            border-top:1px solid #333;
+            padding:8px;
+            pointer-events:auto;
+        `;
+
+        // Toggle logic
+        toggleBtn.addEventListener('click', () => {
+            const shown = logEl.style.display !== 'none';
+            logEl.style.display = shown ? 'none' : 'block';
+            toggleBtn.textContent = shown ? 'Show Logs' : 'Hide Logs';
+        });
+
+        wrapper.appendChild(toggleBtn);
+        wrapper.appendChild(logEl);
+        document.body.appendChild(wrapper);
     }
+
+    // Write logs
     const msg = args.map(x => (typeof x === 'object' ? JSON.stringify(x) : x)).join(' ');
-    el.textContent += msg + '\n';
-    el.scrollTop = el.scrollHeight;
+    logEl.textContent += msg + '\n';
+    logEl.scrollTop = logEl.scrollHeight;
 }
 
+// Patch Logger to always log to page too
 (function() {
-    // Patch Logger to always log to page too
     const origInfo = Logger.info, origWarn = Logger.warn, origError = Logger.error;
     Logger.info  = (...a) => { logToPage('[INFO]', ...a);  origInfo(...a);  };
     Logger.warn  = (...a) => { logToPage('[WARN]', ...a);  origWarn(...a);  };
     Logger.error = (...a) => { logToPage('[ERROR]', ...a); origError(...a); };
 })();
+
