@@ -173,7 +173,8 @@ function createPeerConnection(peerId) {
             offer: pc.localDescription,
             from:  myUUID,
             to:    peerId,
-            room:  ROOM
+            room:  ROOM,
+            name: 'robot'
           })));
       }
     };
