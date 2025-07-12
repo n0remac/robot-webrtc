@@ -145,7 +145,7 @@ func Setup(server *string, room *string, motors []Motorer, myID string) {
 		map[string]string{
 			"acodec":       "libopus",
 			"ar":           "48000",
-			"ac":           "2", // or "1" for mono
+			"ac":           "1", // or "1" for mono
 			"f":            "rtp",
 			"payload_type": "111",
 		},
