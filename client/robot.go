@@ -97,9 +97,9 @@ func Controls(
 		case "r": // claw close
 			rpcAct(4, -1)
 		case "t": // arm up
-			rpcAct(6, -1)
-		case "g": // arm down
 			rpcAct(6, +1)
+		case "g": // arm down
+			rpcAct(6, -1)
 		case "f": // left/right
 			rpcAct(5, +1)
 		case "h":
