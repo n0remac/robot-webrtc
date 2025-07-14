@@ -30,6 +30,9 @@ func NewServer(sg *pca9685.ServoGroup, servoRanges map[int][2]float64) *server {
 	servos := make(map[int]*ServoConfig)
 	for ch, rng := range servoRanges {
 		mid := (rng[0] + rng[1]) / 2
+		if ch == 15 {
+			mid = 0 
+		}
 		fmt.Println("rng:", rng[0], rng[1], "mid:", mid)
 		servos[ch] = &ServoConfig{
 			Min:   rng[0],
