@@ -33,6 +33,7 @@ done
 
 # --- SERVO WINDOW ---
 tmux send-keys -t "$SESSION:servo" "git pull" C-m
+tmux send-keys -t "$SESSION:servo" "chmod +x $PROJ_ROOT/client/start_tmux.sh" C-m
 tmux send-keys -t "$SESSION:servo" "pkill ffmpeg || true" C-m
 tmux send-keys -t "$SESSION:servo" "go run ./cmd/servo/" C-m
 

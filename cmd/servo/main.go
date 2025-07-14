@@ -22,7 +22,7 @@ type nopBus struct{}
 var defaultServoRanges = map[int][2]float64{
 	4:  {15, 140}, // Claw open/close
 	5:  {15, 140}, // Claw rotation
-	6:  {15, 140}, // Arm lift
+	6:  {15, 68}, // Arm lift
 	14: {15, 140}, // Camera pan
 	15: {15, 140}, // Camera tilt
 }
