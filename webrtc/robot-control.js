@@ -69,12 +69,17 @@ async function connectWebSocket() {
   
     ws.onerror = e => Logger.error('WebSocket error', e);
     ws.onclose = (e) => {
-      if (e.code === 1006) {
-        Logger.error('WebSocket closed abnormally', { code: e.code, reason: e.reason });
+      if (e.code !== 1000) {
         Logger.info('Trying to reconnect...');
         setTimeout(connectWebSocket, 1000);
-      } else {
-        Logger.info('WebSocket closed', { code: e.code, reason: e.reason });
+      }
+      if (pc) {
+        pc.close();
+        pc = null;
+        Logger.info("Closed PeerConnection due to signaling disconnect");
+      }
+      if (e.code !== 1000) {
+        setTimeout(connectWebSocket, 1000);
       }
     };
 }
@@ -165,6 +170,7 @@ function createPeerConnection(peerId) {
     };
   
     pc.oniceconnectionstatechange = () => {
+      Logger.info('ICE connection state:', pc.iceConnectionState);
       if (pc.iceConnectionState === 'failed') {
         pc.createOffer({ iceRestart: true })
           .then(o => pc.setLocalDescription(o))
@@ -176,6 +182,10 @@ function createPeerConnection(peerId) {
             room:  ROOM,
             name: 'robot'
           })));
+      }
+      if (pc.iceConnectionState === 'disconnected' || pc.iceConnectionState === 'closed') {
+        // Optional: attempt recovery or notify user
+        Logger.warn('ICE disconnected, consider retrying or alerting user');
       }
     };
   
@@ -261,15 +271,6 @@ function handleUserDisconnect(uuid) {
       }
 }
 
-async function fetchTurnCredentials() {
-    try {
-        const res = await fetch('/turn-credentials');
-        return res.ok ? res.json() : null;
-    } catch (e) {
-        return null;
-    }
-}
-
 function generateUUID() {
     // If available, use the browser's native randomUUID
     if (window.crypto && window.crypto.randomUUID) {
@@ -330,7 +331,6 @@ function createKeyPressEventListener(key) {
 }
 
 function start() {
-    bindkeys();
     joinSession();
 }
 

@@ -9,7 +9,7 @@ import (
 	"log"
 
 	"periph.io/x/conn/v3/physic"
-	"periph.io/x/devices/v3/pca9685"
+	"periph.io/x/devices/v3/pca9685" 
 )
 
 type ServoConfig struct {
@@ -31,7 +31,7 @@ func NewServer(sg *pca9685.ServoGroup, servoRanges map[int][2]float64) *server {
 	for ch, rng := range servoRanges {
 		mid := (rng[0] + rng[1]) / 2
 		if ch == 15 {
-			mid = 0 
+			mid = 0  
 		}
 		fmt.Println("rng:", rng[0], rng[1], "mid:", mid)
 		servos[ch] = &ServoConfig{
