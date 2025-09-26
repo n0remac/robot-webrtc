@@ -1,296 +1,242 @@
-// sfu.js
+// sfu.js (with perfect negotiation)
 
-const domainName = window.location.hostname === "localhost" ? "localhost:8080" : "noremac.dev";
-const wsProtocol = window.location.protocol === "https:" ? "wss" : "ws";
 const ROOM = new URLSearchParams(location.search).get("room") || "default";
 
 let myUUID = generateUUID();
-let myName;
-let ws;
-let pc;
-let localStream;
+let myName = "";
+let ws, pc, localStream;
 let globalIceServers = [];
 let candidateQueue = [];
 let remoteDescSet = false;
-
-// Map: track.id => { element, kind }
 const remoteTrackMap = {};
 
-window.addEventListener('beforeunload', () => {
-    if (ws && ws.readyState === WebSocket.OPEN) {
-        ws.send(JSON.stringify({
-            type: 'leave',
-            from: myUUID,
-            room: ROOM
-        }));
-        ws.close();
-    }
+window.addEventListener("beforeunload", () => {
+    try { if (ws?.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: "leave" })); } catch { }
+    try { ws?.close(); } catch { }
 });
 
 document.addEventListener("DOMContentLoaded", () => {
-    document.getElementById('test-camera').addEventListener('click', testCamera);
-    document.getElementById('test-mic').addEventListener('click', testMic);
-    document.getElementById('join-btn').addEventListener('click', joinSFUSession);
+    document.getElementById("test-camera").addEventListener("click", testCamera);
+    document.getElementById("test-mic").addEventListener("click", testMic);
+    document.getElementById("join-btn").addEventListener("click", joinSFUSession);
 });
 
 async function joinSFUSession() {
-    myName = document.getElementById('name').value;
-    if (!myName) return alert('Please enter your name');
+    myName = document.getElementById("name").value || "";
     myUUID = generateUUID();
-    Logger.info('SFU join click', { uuid: myUUID, name: myName });
+    Logger.info("SFU join click", { uuid: myUUID, name: myName, room: ROOM });
 
-    document.getElementById('join-screen').style.display = 'none';
-    document.getElementById('participant-view').style.display = 'block';
+    document.getElementById("join-screen").style.display = "none";
+    document.getElementById("participant-view").style.display = "block";
 
     const turnData = await fetchTurnCredentials();
     setupIceServers(turnData);
     await setupLocalMedia();
     showLocalVideo();
-    await connectSFUWebSocket();
+    await connectSFUSocket();
 }
 
 async function fetchTurnCredentials() {
     try {
-        const res = await fetch('/turn-credentials');
-        if (!res.ok) {
-            console.error('Failed to fetch turn credentials:', res.status, res.statusText);
-            return null;
-        }
-        const text = await res.text();
-        try {
-            return JSON.parse(text);
-        } catch (err) {
-            console.error('Turn credentials are not JSON:', text);
-            return null;
-        }
-    } catch (e) {
-        console.error('Error fetching turn credentials:', e);
-        return null;
-    }
+        const res = await fetch("/turn-credentials");
+        if (!res.ok) return null;
+        return await res.json().catch(() => null);
+    } catch { return null; }
 }
 
-
 function setupIceServers(turnData) {
-    globalIceServers = [
-        { urls: 'stun:stun.l.google.com:19302' },
-    ];
+    globalIceServers = [{ urls: "stun:stun.l.google.com:19302" }];
     if (turnData?.username && turnData?.password) {
-        globalIceServers.push({ urls: 'turn:turn.noremac.dev:3478?transport=udp', username: turnData.username, credential: turnData.password });
-        globalIceServers.push({ urls: 'turns:turn.noremac.dev:443?transport=tcp', username: turnData.username, credential: turnData.password });
+        globalIceServers.push(
+            { urls: "turn:turn.noremac.dev:3478?transport=udp", username: turnData.username, credential: turnData.password },
+            { urls: "turns:turn.noremac.dev:443?transport=tcp", username: turnData.username, credential: turnData.password },
+        );
     }
-    Logger.info('SFU ICE list built', { count: globalIceServers.length });
 }
 
 async function setupLocalMedia() {
-    let videoStream = null;
-    let audioStream = null;
-
     try {
-        videoStream = await navigator.mediaDevices.getUserMedia({ video: true });
-        Logger.info('video gUM success');
-    } catch (err) {
-        Logger.warn('video unavailable, continuing without camera', err);
-    }
-
-    try {
-        audioStream = await navigator.mediaDevices.getUserMedia({ audio: true });
-        Logger.info('audio gUM success');
-    } catch (err) {
-        Logger.warn('audio unavailable, continuing without mic', err);
-    }
-
-    const tracks = [
-        ...(videoStream ? videoStream.getVideoTracks() : []),
-        ...(audioStream ? audioStream.getAudioTracks() : [])
-    ];
-    localStream = new MediaStream(tracks);
-
-    if (tracks.length === 0) {
-        const warn = document.getElementById('no-media-warning');
-        if (warn) warn.textContent = '⚠️ No camera or mic available; joining with media disabled.';
+        localStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: true });
+        return;
+    } catch { }
+    let audio = null, video = null;
+    try { audio = await navigator.mediaDevices.getUserMedia({ audio: true }); } catch { }
+    try { video = await navigator.mediaDevices.getUserMedia({ video: true }); } catch { }
+    localStream = new MediaStream([
+        ...(video ? video.getVideoTracks() : []),
+        ...(audio ? audio.getAudioTracks() : []),
+    ]);
+    if (localStream.getTracks().length === 0) {
+        const warn = document.getElementById("no-media-warning");
+        if (warn) warn.textContent = "⚠️ Joined without camera/mic (permissions or devices).";
     }
 }
 
 function showLocalVideo() {
-    const video = Object.assign(document.createElement('video'), {
-        id: 'local-video',
-        srcObject: localStream,
-        autoplay: true,
-        playsInline: true,
-        muted: true,
+    const video = Object.assign(document.createElement("video"), {
+        id: "local-video", srcObject: localStream, autoplay: true, playsInline: true, muted: true,
     });
-    video.classList.add('local-video');
-    document.getElementById('videos').appendChild(video);
-    Logger.info('local video added');
+    video.classList.add("local-video");
+    document.getElementById("videos").appendChild(video);
 }
 
-async function connectSFUWebSocket() {
-    ws = new WebSocket(
-        (location.protocol === 'https:' ? 'wss://' : 'ws://') +
+/* ----------------------- Perfect Negotiation bits ----------------------- */
+let makingOffer = false;
+const polite = true;
+
+async function maybeMakeOffer() {
+    if (makingOffer || pc.signalingState !== "stable") return;
+    makingOffer = true;
+    try {
+        // Let the browser create & set the right offer in one step
+        await pc.setLocalDescription(); // implicit createOffer + setLocalDescription
+        const ld = pc.localDescription;
+        ws.send(JSON.stringify({
+            type: "offer",
+            offer: { type: ld.type, sdp: ld.sdp },
+            name: myName
+        }));
+    } catch (e) {
+        Logger.error("[SFU] offer flow failed", e);
+    } finally {
+        makingOffer = false;
+    }
+}
+
+/* ----------------------------------------------------------------------- */
+
+async function connectSFUSocket() {
+    const url =
+        (location.protocol === "https:" ? "wss://" : "ws://") +
         location.host +
-        '/ws/sfu?id=' + encodeURIComponent(myUUID)
-    );
+        `/ws/sfu?room=${encodeURIComponent(ROOM)}&id=${encodeURIComponent(myUUID)}`;
+    ws = new WebSocket(url);
 
     ws.onopen = async () => {
-        Logger.info('[SFU] WebSocket open');
-
-        // Create PeerConnection and wire up handlers
+        Logger.info("[SFU] WS open", { room: ROOM, id: myUUID });
         pc = new RTCPeerConnection({ iceServers: globalIceServers });
 
-        pc.addTransceiver("video", { direction: "sendrecv" });
-        pc.addTransceiver("audio", { direction: "sendrecv" });
+        pc.onconnectionstatechange = () => {
+            Logger.info("PC state", pc.connectionState);
+            if (pc.connectionState === "failed" || pc.connectionState === "closed") teardownPeer();
+        };
 
-        // Add our local tracks to the PC
-        if (localStream) {
-            localStream.getTracks().forEach(t => pc.addTrack(t, localStream));
-        }
+        // Add local tracks (triggers negotiationneeded)
+        if (localStream) for (const t of localStream.getTracks()) pc.addTrack(t, localStream);
 
-        pc.onsignalingstatechange = () => console.log("SignalingState:", pc.signalingState);
-        pc.oniceconnectionstatechange = () => console.log("ICEConnectionState:", pc.iceConnectionState);
-        
-        // --- Remote track handling and cleanup ---
+        pc.onnegotiationneeded = () => { maybeMakeOffer(); };
+
         pc.ontrack = ({ track, streams }) => {
-            let stream = streams[0] || new MediaStream([track]);
-            console.log('ontrack fired:', track, streams, stream);
-            // Add to UI if not already present
+            const stream = streams?.[0] || new MediaStream([track]);
             if (!remoteTrackMap[track.id]) {
                 if (track.kind === "video") {
-                    const video = Object.assign(document.createElement('video'), {
-                        id: `remote-video-${track.id}`,
-                        srcObject: stream,
-                        autoplay: true,
-                        playsInline: true,
-                        muted: false
+                    const el = Object.assign(document.createElement("video"), {
+                        id: `remote-video-${track.id}`, srcObject: stream, autoplay: true, playsInline: true,
                     });
-                    video.classList.add('remote-video');
-                    document.getElementById('videos').appendChild(video);
-                    Logger.info('[SFU] remote video added', { track: track.id });
-                    remoteTrackMap[track.id] = { element: video, kind: "video" };
-                } else if (track.kind === "audio") {
-                    const audio = Object.assign(document.createElement('audio'), {
-                        id: `remote-audio-${track.id}`,
-                        srcObject: stream,
-                        autoplay: true,
-                    });
-                    document.body.appendChild(audio);
-                    Logger.info('[SFU] remote audio added', { track: track.id });
-                    remoteTrackMap[track.id] = { element: audio, kind: "audio" };
+                    el.classList.add("remote-video");
+                    document.getElementById("videos").appendChild(el);
+                    remoteTrackMap[track.id] = { element: el, kind: "video" };
+                } else {
+                    const el = Object.assign(document.createElement("audio"), { autoplay: true, srcObject: stream });
+                    document.body.appendChild(el);
+                    remoteTrackMap[track.id] = { element: el, kind: "audio" };
                 }
             }
-
-            // Remove UI when track ends
             track.onended = () => {
                 const item = remoteTrackMap[track.id];
-                if (item && item.element) {
-                    item.element.remove();
-                    Logger.info(`[SFU] removed ${item.kind} for ended track`, { track: track.id });
-                }
+                if (item?.element) item.element.remove();
                 delete remoteTrackMap[track.id];
             };
         };
 
-        // ICE candidate gathering (local → SFU)
-        pc.onicecandidate = (e) => {
-            if (e.candidate) {
-                ws.send(JSON.stringify({
-                    type: 'candidate',
-                    candidate: e.candidate
-                }));
-            }
-        };
-
-        // --- Begin signaling: create offer and send to server ---
-        const offer = await pc.createOffer();
-        await pc.setLocalDescription(offer);
-
-        ws.send(JSON.stringify({
-            type: 'offer',
-            offer: pc.localDescription,
-            name: myName,
-            id: myUUID
-        }));
+        pc.onicecandidate = (e) => { if (e.candidate) ws.send(JSON.stringify({ type: "candidate", candidate: e.candidate })); };
     };
 
     ws.onmessage = async ({ data }) => {
         const msg = JSON.parse(data);
-        console.log('WS MESSAGE', msg.type, msg);
-        switch (msg.type) {
-            case "answer":
-                console.log('Setting remote description (answer)', msg.answer);
+
+        if (msg.type === "offer") {
+            const offerCollision = makingOffer || pc.signalingState !== "stable";
+            const ignoreOffer = !polite && offerCollision;
+            if (ignoreOffer) return;
+
+            try {
+                if (offerCollision) await pc.setLocalDescription({ type: "rollback" });
+                await pc.setRemoteDescription(msg.offer);
+                await pc.setLocalDescription(await pc.createAnswer());
+
+                const ld = pc.localDescription;
+                ws.send(JSON.stringify({
+                    type: "answer",
+                    answer: { type: ld.type, sdp: ld.sdp }
+                }));
+
+                remoteDescSet = true;
+                for (const c of candidateQueue) { try { await pc.addIceCandidate(c); } catch { } }
+                candidateQueue = [];
+            } catch (e) {
+                Logger.error("[SFU] handle remote offer failed", e);
+            }
+            return;
+        }
+
+
+        if (msg.type === "answer") {
+            try {
                 await pc.setRemoteDescription(msg.answer);
                 remoteDescSet = true;
-                for (const c of candidateQueue) {
-                    try { await pc.addIceCandidate(c); } catch (e) { Logger.error('[SFU] candidate flush failed', e); }
-                }
+                for (const c of candidateQueue) { try { await pc.addIceCandidate(c); } catch { } }
                 candidateQueue = [];
-                Logger.info('[SFU] Set remote description (answer)');
-                break;
-            case "candidate":
-                console.log('Received candidate', msg.candidate);
-                if (!remoteDescSet || !pc.remoteDescription) {
-                    candidateQueue.push(msg.candidate);
-                } else {
-                    try {
-                        await pc.addIceCandidate(msg.candidate);
-                        Logger.info('[SFU] Added ICE candidate');
-                    } catch (e) {
-                        Logger.error('[SFU] Failed to add ICE candidate', e);
-                    }
-                }
-                break;
-            case "offer":
-                console.log('Received offer', msg.offer);
-                try {
-                    if (pc.signalingState !== "stable") {
-                        await pc.setLocalDescription({ type: "rollback" });
-                    }
-                    await pc.setRemoteDescription(msg.offer);
-                    for (const c of candidateQueue) {
-                        try { await pc.addIceCandidate(c); } catch (e) { Logger.error('[SFU] candidate flush failed', e); }
-                    }
-                    candidateQueue = [];
-                    const answer = await pc.createAnswer();
-                    await pc.setLocalDescription(answer);
-                    ws.send(JSON.stringify({
-                        type: 'answer',
-                        answer: pc.localDescription,
-                    }));
-                    Logger.info('[SFU] Renegotiated and sent answer');
-                } catch (e) {
-                    Logger.error('[SFU] Failed to handle offer', e);
-                }
-                break;
+            } catch (e) {
+                Logger.error("[SFU] setRemoteDescription(answer) failed", e);
+            }
+            return;
+        }
+
+
+        if (msg.type === "candidate") {
+            if (!remoteDescSet || !pc.remoteDescription) {
+                candidateQueue.push(msg.candidate);
+            } else {
+                try { await pc.addIceCandidate(msg.candidate); } catch (e) { Logger.error("[SFU] addIceCandidate failed", e); }
+            }
+            return;
         }
     };
 
-
-    ws.onerror = e => Logger.error('[SFU] WebSocket error', e);
-    ws.onclose = (e) => {
-        Logger.warn('[SFU] WebSocket closed', { code: e.code, reason: e.reason });
-        // Optionally: add reconnect logic
-    };
+    ws.onerror = (e) => Logger.error("[SFU] WS error", e);
+    ws.onclose = () => teardownPeer();
 }
 
-function generateUUID() {
-    // If available, use the browser's native randomUUID
-    if (window.crypto && window.crypto.randomUUID) {
-        return window.crypto.randomUUID();
-    }
-    // Otherwise, polyfill
-    const hex = [];
-    const rnds = new Uint8Array(16);
-    window.crypto.getRandomValues(rnds);
-    rnds[6] = (rnds[6] & 0x0f) | 0x40; // version 4
-    rnds[8] = (rnds[8] & 0x3f) | 0x80; // variant 10xx
+function teardownPeer() {
+    try { ws?.readyState === WebSocket.OPEN && ws.send(JSON.stringify({ type: "leave" })); } catch { }
+    try { ws?.close(); } catch { }
+    try { pc?.getSenders().forEach(s => s.track && s.track.stop()); } catch { }
+    try { pc?.close(); } catch { }
+    for (const k in remoteTrackMap) { remoteTrackMap[k]?.element?.remove(); delete remoteTrackMap[k]; }
+}
 
-    for (let i = 0; i < 16; i++) {
-        hex.push(rnds[i].toString(16).padStart(2, '0'));
-    }
-    return [
-        hex.slice(0, 4).join(''),
-        hex.slice(4, 6).join(''),
-        hex.slice(6, 8).join(''),
-        hex.slice(8, 10).join(''),
-        hex.slice(10, 16).join('')
-    ].join('-');
+/* ---------------------- helpers & test controls ---------------------- */
+
+function generateUUID() {
+    if (crypto?.randomUUID) return crypto.randomUUID();
+    const hex = [], rnds = new Uint8Array(16); crypto.getRandomValues(rnds);
+    rnds[6] = (rnds[6] & 0x0f) | 0x40; rnds[8] = (rnds[8] & 0x3f) | 0x80;
+    for (let i = 0; i < 16; i++) hex.push(rnds[i].toString(16).padStart(2, "0"));
+    return [hex.slice(0, 4).join(""), hex.slice(4, 6).join(""), hex.slice(6, 8).join(""), hex.slice(8, 10).join(""), hex.slice(10, 16).join("")].join("-");
+}
+
+async function testCamera() {
+    try {
+        const s = await navigator.mediaDevices.getUserMedia({ video: true });
+        const v = document.getElementById("preview-video"); v.style.display = "block"; v.srcObject = s;
+    } catch (e) { Logger.error("preview camera failed", e); }
+}
+
+async function testMic() {
+    try {
+        const s = await navigator.mediaDevices.getUserMedia({ audio: true });
+        s.getTracks().forEach(t => t.stop());
+        document.getElementById("mic-status").textContent = "🎤 Mic OK";
+    } catch { document.getElementById("mic-status").textContent = "❌ Mic not available"; }
 }

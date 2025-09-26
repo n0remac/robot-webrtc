@@ -7,417 +7,651 @@ import (
 	"math/rand"
 	"net/http"
 	"sync"
+	"time"
 
 	"github.com/gorilla/websocket"
+	wsock "github.com/n0remac/robot-webrtc/websocket"
+	"github.com/pion/interceptor"
+	"github.com/pion/rtcp"
 	"github.com/pion/webrtc/v4"
 )
 
+/* -------------------------- Types & Wire Messages -------------------------- */
+
+type sfuMessage struct {
+	Type      string                     `json:"type"`
+	Name      string                     `json:"name,omitempty"`
+	From      string                     `json:"from,omitempty"`
+	Room      string                     `json:"room,omitempty"`
+	Offer     *webrtc.SessionDescription `json:"offer,omitempty"`
+	Answer    *webrtc.SessionDescription `json:"answer,omitempty"`
+	Candidate *webrtc.ICECandidateInit   `json:"candidate,omitempty"`
+}
+
+/* --------------------------------- SFU Core -------------------------------- */
+
+type sfuPeer struct {
+	id   string
+	room string
+
+	conn *websocket.Conn
+	send chan []byte // single writer goroutine, hub-style
+
+	pc *webrtc.PeerConnection
+
+	// For each publisherID and trackID, keep sender for cleanup/removal
+	sendersMu sync.Mutex
+	// key: pubID|trackID -> sender
+	senders map[string]*webrtc.RTPSender
+
+	// (optional) quick maps for direct write-by-pub
+	localVideo map[string]*webrtc.TrackLocalStaticRTP // key: pubID|trackID
+	localAudio map[string]*webrtc.TrackLocalStaticRTP // key: pubID|trackID
+
+	// candidates buffered until RemoteDescription set
+	candMu    sync.Mutex
+	candQueue []webrtc.ICECandidateInit
+	remoteSet bool
+
+	// negotiation coalescing
+	negCh   chan struct{}
+	negOnce sync.Once
+
+	// ICE restart guard
+	restartMu    sync.Mutex
+	iceRestartIn bool
+
+	closed chan struct{}
+}
+
+type pubTrack struct {
+	remote  *webrtc.TrackRemote
+	kind    webrtc.RTPCodecType
+	pubID   string
+	trackID string
+	pubPC   *webrtc.PeerConnection
+}
+
 type sfuRoom struct {
-	mu      sync.Mutex
-	clients map[string]*sfuClient
+	mu     sync.Mutex
+	peers  map[string]*sfuPeer
+	roomID string
+
+	// publisherID -> trackID -> pubTrack
+	pubs map[string]map[string]*pubTrack
 }
 
-type sfuClient struct {
-	id               string
-	conn             *websocket.Conn
-	pc               *webrtc.PeerConnection
-	localVideoTracks map[string]*webrtc.TrackLocalStaticRTP
-	localAudioTracks map[string]*webrtc.TrackLocalStaticRTP
-	candQueue        []webrtc.ICECandidateInit
-	restartMu        sync.Mutex
-	hasFailedICE     bool
-	send             chan interface{}
+type sfuServer struct {
+	mu    sync.Mutex
+	rooms map[string]*sfuRoom
+	api   *webrtc.API
 }
 
-// Single room for now, could make map[string]*sfuRoom for multi-room
-var sfuRoomHub = &sfuRoom{clients: make(map[string]*sfuClient)}
+var sfu = &sfuServer{
+	rooms: make(map[string]*sfuRoom),
+	api:   newSFUAPI(),
+}
 
+/* ----------------------------- Pion API / codecs ---------------------------- */
+
+func newSFUAPI() *webrtc.API {
+	m := &webrtc.MediaEngine{}
+	// Robust: register all browser-common codecs (dynamic PTs negotiated by SDP)
+	if err := m.RegisterDefaultCodecs(); err != nil {
+		panic(err)
+	}
+	ir := &interceptor.Registry{}
+	if err := webrtc.RegisterDefaultInterceptors(m, ir); err != nil {
+		panic(err)
+	}
+	return webrtc.NewAPI(
+		webrtc.WithMediaEngine(m),
+		webrtc.WithInterceptorRegistry(ir),
+	)
+}
+
+// For now, let server do public STUN only; keep symmetric to the client.
 var sfuIceServers = []webrtc.ICEServer{
 	{URLs: []string{"stun:stun.l.google.com:19302"}},
-	// TODO: add dynamic TURN config if needed
 }
 
-// ---- Helper: create compatible MediaEngine (browser codecs) ----
-func newSFUAPI() *webrtc.API {
-	m := webrtc.MediaEngine{}
-	// Explicitly support H264 and Opus for browser compatibility
-	m.RegisterCodec(webrtc.RTPCodecParameters{
-		RTPCodecCapability: webrtc.RTPCodecCapability{
-			MimeType:    "video/H264",
-			ClockRate:   90000,
-			SDPFmtpLine: "packetization-mode=1;profile-level-id=42e01f",
-		},
-		PayloadType: 109,
-	}, webrtc.RTPCodecTypeVideo)
-	m.RegisterCodec(webrtc.RTPCodecParameters{
-		RTPCodecCapability: webrtc.RTPCodecCapability{
-			MimeType: webrtc.MimeTypeOpus, ClockRate: 48000, Channels: 2,
-		},
-		PayloadType: 111,
-	}, webrtc.RTPCodecTypeAudio)
-	return webrtc.NewAPI(webrtc.WithMediaEngine(&m))
+/* --------------------------------- Routing --------------------------------- */
+
+func (s *sfuServer) getRoom(id string) *sfuRoom {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	rm, ok := s.rooms[id]
+	if !ok {
+		rm = &sfuRoom{
+			peers:  make(map[string]*sfuPeer),
+			pubs:   make(map[string]map[string]*pubTrack),
+			roomID: id,
+		}
+		s.rooms[id] = rm
+	}
+
+	return rm
 }
 
-// ---- Handler ----
+func (r *sfuRoom) addPeer(p *sfuPeer) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.peers[p.id] = p
+}
+
+func (r *sfuRoom) delPeer(id string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	delete(r.peers, id)
+}
+
+func (r *sfuRoom) others(except string) []*sfuPeer {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	out := make([]*sfuPeer, 0, len(r.peers))
+	for id, p := range r.peers {
+		if id == except {
+			continue
+		}
+		out = append(out, p)
+	}
+	return out
+}
+
+/* --------------------------------- Handler --------------------------------- */
+
+// SfuWebsocketHandler wires /ws/sfu?room=...&id=... to a durable per-peer WS with a Pion PC.
 func SfuWebsocketHandler(w http.ResponseWriter, r *http.Request) {
-	upgrader := websocket.Upgrader{CheckOrigin: func(r *http.Request) bool { return true }}
-	ws, err := upgrader.Upgrade(w, r, nil)
+	room := r.URL.Query().Get("room")
+	if room == "" {
+		room = "default"
+	}
+	id := r.URL.Query().Get("id")
+	if id == "" {
+		id = randomSFUID()
+	}
+
+	// Reuse your Upgrader (origin check, buffer sizes) & WS durability patterns
+	conn, err := wsock.Upgrader.Upgrade(w, r, nil)
 	if err != nil {
-		http.Error(w, "WebSocket upgrade failed", http.StatusBadRequest)
+		log.Printf("[SFU] WS upgrade failed: %v", err)
 		return
 	}
-	defer ws.Close()
+	log.Printf("[SFU] WS connected room=%s id=%s", room, id)
 
-	api := newSFUAPI()
-	pc, err := api.NewPeerConnection(webrtc.Configuration{ICEServers: sfuIceServers})
+	pc, err := sfu.api.NewPeerConnection(webrtc.Configuration{ICEServers: sfuIceServers})
 	if err != nil {
-		log.Println("SFU: PC create error:", err)
+		_ = conn.Close()
+		log.Printf("[SFU] PeerConnection create error: %v", err)
 		return
 	}
-	defer pc.Close()
+	_, _ = pc.AddTransceiverFromKind(webrtc.RTPCodecTypeAudio, webrtc.RTPTransceiverInit{Direction: webrtc.RTPTransceiverDirectionRecvonly})
+	_, _ = pc.AddTransceiverFromKind(webrtc.RTPCodecTypeVideo, webrtc.RTPTransceiverInit{Direction: webrtc.RTPTransceiverDirectionRecvonly})
 
-	clientID := r.URL.Query().Get("id")
-	if clientID == "" {
-		clientID = randomSFUID()
+	p := &sfuPeer{
+		id:         id,
+		room:       room,
+		conn:       conn,
+		send:       make(chan []byte, 256), // bounded like your hub
+		pc:         pc,
+		senders:    make(map[string]*webrtc.RTPSender),
+		localVideo: make(map[string]*webrtc.TrackLocalStaticRTP),
+		localAudio: make(map[string]*webrtc.TrackLocalStaticRTP),
+		negCh:      make(chan struct{}, 1),
+		closed:     make(chan struct{}),
 	}
 
-	myClient := &sfuClient{
-		id:               clientID,
-		conn:             ws,
-		pc:               pc,
-		localVideoTracks: make(map[string]*webrtc.TrackLocalStaticRTP),
-		localAudioTracks: make(map[string]*webrtc.TrackLocalStaticRTP),
-		candQueue:        []webrtc.ICECandidateInit{},
-		send:             make(chan interface{}, 32),
-	}
+	p.negOnce.Do(func() { go negotiatorWorker(p) })
 
-	// // --- Create one audio, one video track per peer ---
-	// audioTrack, _ := webrtc.NewTrackLocalStaticRTP(
-	// 	webrtc.RTPCodecCapability{MimeType: webrtc.MimeTypeOpus, ClockRate: 48000, Channels: 2},
-	// 	"audio", myClient.id)
-	// videoTrack, _ := webrtc.NewTrackLocalStaticRTP(
-	// 	webrtc.RTPCodecCapability{MimeType: "video/H264", ClockRate: 90000},
-	// 	"video", myClient.id)
-	// pc.AddTrack(audioTrack)
-	// pc.AddTrack(videoTrack)
-	// myClient.audioTrack = audioTrack
-	// myClient.videoTrack = videoTrack
+	rm := sfu.getRoom(room)
+	rm.addPeer(p)
 
-	go func() {
-		for msg := range myClient.send {
-			if err := myClient.conn.WriteJSON(msg); err != nil {
-				log.Printf("[SFU] WriteJSON error for %s: %v", myClient.id, err)
-				return // On error, exit goroutine (you may want to handle reconnection)
+	// If there are existing publishers in the room, attach their tracks to this new peer
+	attachExistingPublishersTo(p, rm)
+
+	// Wire Pion events
+	wirePeerEvents(p, rm)
+
+	// Start writer (single goroutine) before we may send anything
+	go writePumpSFU(p)
+
+	// Start reader (messages → signaling)
+	readPumpSFU(p, rm)
+
+	rm.mu.Lock()
+	deadTracks := rm.pubs[p.id]
+	delete(rm.pubs, p.id)
+	rm.mu.Unlock()
+
+	if len(deadTracks) > 0 {
+		subs := rm.others(p.id)
+		for _, sub := range subs {
+			sub.sendersMu.Lock()
+			for trackID := range deadTracks {
+				k := senderKey(p.id, trackID)
+				if snd, ok := sub.senders[k]; ok {
+					_ = sub.pc.RemoveTrack(snd)
+					delete(sub.senders, k)
+				}
+				delete(sub.localVideo, k)
+				delete(sub.localAudio, k)
 			}
+			sub.sendersMu.Unlock()
+			requestNegotiation(sub)
 		}
-	}()
+	}
 
-	// pc.OnSignalingStateChange(func(state webrtc.SignalingState) {
-	// 	go triggerNegotiationIfStable(myClient)
-	// })
+	// Cleanup happens after readPump returns
+	rm.delPeer(p.id)
+	close(p.send)
+	_ = p.conn.Close()
+	_ = p.pc.Close()
+	log.Printf("[SFU] peer %s left room %s", p.id, p.room)
+}
 
-	// Register ICE event handlers for robustness
-	pc.OnICEConnectionStateChange(func(state webrtc.ICEConnectionState) {
-		log.Printf("[SFU] ICE state for %s: %s", myClient.id, state.String())
-		if state == webrtc.ICEConnectionStateFailed && !myClient.hasFailedICE {
-			go sfuRestartICE(myClient)
-		}
-	})
+/* --------------------------- Pion event handlers --------------------------- */
 
-	pc.OnICECandidate(func(c *webrtc.ICECandidate) {
+func wirePeerEvents(p *sfuPeer, rm *sfuRoom) {
+	// Server → client trickle ICE
+	p.pc.OnICECandidate(func(c *webrtc.ICECandidate) {
 		if c == nil {
 			return
 		}
-		candidate := map[string]interface{}{
-			"type":      "candidate",
-			"candidate": c.ToJSON(),
-		}
-		myClient.send <- candidate
+		reply := sfuMessage{Type: "candidate", Candidate: ptr(c.ToJSON())}
+		sendJSON(p, reply)
 	})
 
-	// --- Add this client to room ---
-	sfuRoomHub.mu.Lock()
-	sfuRoomHub.clients[myClient.id] = myClient
-	others := make([]*sfuClient, 0, len(sfuRoomHub.clients)-1)
-	for _, c := range sfuRoomHub.clients {
-		if c.id != myClient.id {
-			others = append(others, c)
+	p.pc.OnICEConnectionStateChange(func(state webrtc.ICEConnectionState) {
+		log.Printf("[SFU] ICE %s peer=%s", state.String(), p.id)
+		if state == webrtc.ICEConnectionStateFailed {
+			go sfuRestartICE(p)
 		}
-	}
-	sfuRoomHub.mu.Unlock()
+	})
 
-	log.Printf("[SFU] Client %s connected. Total now: %d", myClient.id, len(sfuRoomHub.clients))
+	// Publisher track arrived → create per-subscriber local tracks and renegotiate them
+	p.pc.OnTrack(func(remote *webrtc.TrackRemote, _ *webrtc.RTPReceiver) {
+		pubID := p.id
+		trackID := remote.ID()
+		kind := remote.Kind()
+		log.Printf("[SFU] publish %s %s by %s", kind.String(), trackID, pubID)
 
-	// --- Fan out incoming RTP to all others ---
-	pc.OnTrack(func(remote *webrtc.TrackRemote, receiver *webrtc.RTPReceiver) {
-		log.Printf("[SFU] Client %s published new %s track %s", myClient.id, remote.Kind().String(), remote.ID())
-
-		// Create new outbound tracks for every *other* client:
-		sfuRoomHub.mu.Lock()
-		for _, other := range sfuRoomHub.clients {
-			if other.id == myClient.id {
-				continue
-			}
-			// Build new local track for this publisher's remote track
-			outTrack, err := webrtc.NewTrackLocalStaticRTP(
-				remote.Codec().RTPCodecCapability,
-				remote.ID(),
-				myClient.id, // Use publisher id as stream id
-			)
-			if err != nil {
-				log.Printf("[SFU] Failed to create local track: %v", err)
-				continue
-			}
-
-			// Add track to subscriber's PeerConnection
-			_, err = other.pc.AddTrack(outTrack)
-			if err != nil {
-				log.Printf("[SFU] AddTrack failed: %v", err)
-				continue
-			}
-
-			// Store the track for this publisher
-			if remote.Kind() == webrtc.RTPCodecTypeAudio {
-				other.localAudioTracks[myClient.id] = outTrack
-			} else if remote.Kind() == webrtc.RTPCodecTypeVideo {
-				other.localVideoTracks[myClient.id] = outTrack
-			}
-
-			// Renegotiate this subscriber to send an offer
-			go func(c *sfuClient) {
-				offer, err := c.pc.CreateOffer(nil)
-				if err != nil {
-					log.Printf("[SFU] CreateOffer failed: %v", err)
-					return
-				}
-				if err := c.pc.SetLocalDescription(offer); err != nil {
-					log.Printf("[SFU] SetLocalDescription failed: %v", err)
-					return
-				}
-				c.send <- map[string]interface{}{"type": "offer", "offer": c.pc.LocalDescription()}
-				log.Printf("[SFU] Sent renegotiation offer to %s", c.id)
-			}(other)
+		rm.mu.Lock()
+		if _, ok := rm.pubs[pubID]; !ok {
+			rm.pubs[pubID] = make(map[string]*pubTrack)
 		}
-		sfuRoomHub.mu.Unlock()
+		rm.pubs[pubID][trackID] = &pubTrack{
+			remote:  remote,
+			kind:    kind,
+			pubID:   pubID,
+			trackID: trackID,
+			pubPC:   p.pc,
+		}
+		rm.mu.Unlock()
 
-		// Relay RTP packets to all other clients' tracks for this publisher
+		// For each other peer in the room, create an outbound track + sender
+		others := rm.others(p.id)
+		for _, sub := range others {
+			codec := remote.Codec().RTPCodecCapability
+			out, err := webrtc.NewTrackLocalStaticRTP(codec, trackID, pubID)
+			if err != nil {
+				log.Printf("[SFU] create local track failed: %v", err)
+				continue
+			}
+			sender, err := sub.pc.AddTrack(out)
+			if err != nil {
+				log.Printf("[SFU] AddTrack to %s failed: %v", sub.id, err)
+				continue
+			}
+
+			key := senderKey(pubID, trackID)
+			sub.sendersMu.Lock()
+			sub.senders[key] = sender
+			if kind == webrtc.RTPCodecTypeVideo {
+				sub.localVideo[key] = out
+			} else {
+				sub.localAudio[key] = out
+			}
+			sub.sendersMu.Unlock()
+
+			// (Optional) RTCP relay for PLI/FIR — enable when ready.
+			go relayRTCPToPublisher(sender, remote, p.pc)
+
+			// Ask the subscriber to renegotiate (coalesced)
+			requestNegotiation(sub)
+		}
+
+		// Forward RTP from publisher to all subscribers' local tracks
 		go func() {
 			buf := make([]byte, 1500)
 			for {
-				n, _, readErr := remote.Read(buf)
-				if readErr != nil {
+				n, _, err := remote.Read(buf)
+				if err != nil {
 					break
 				}
-				sfuRoomHub.mu.Lock()
-				for _, other := range sfuRoomHub.clients {
-					if other.id == myClient.id {
-						continue
+				// Fan-out payload to each subscriber's outbound track for this publisher
+				subs := rm.others(p.id)
+				for _, sub := range subs {
+					var out *webrtc.TrackLocalStaticRTP
+					k := senderKey(pubID, trackID)
+					if kind == webrtc.RTPCodecTypeVideo {
+						out = sub.localVideo[k]
+					} else {
+						out = sub.localAudio[k]
 					}
-					var outTrack *webrtc.TrackLocalStaticRTP
-					if remote.Kind() == webrtc.RTPCodecTypeAudio {
-						outTrack = other.localAudioTracks[myClient.id]
-					} else if remote.Kind() == webrtc.RTPCodecTypeVideo {
-						outTrack = other.localVideoTracks[myClient.id]
-					}
-					if outTrack != nil {
-						_, _ = outTrack.Write(buf[:n])
+					if out != nil {
+						_, _ = out.Write(buf[:n])
 					}
 				}
-				sfuRoomHub.mu.Unlock()
+			}
+
+			rm.mu.Lock()
+			if tracks, ok := rm.pubs[pubID]; ok {
+				delete(tracks, trackID)
+				if len(tracks) == 0 {
+					delete(rm.pubs, pubID)
+				}
+			}
+			rm.mu.Unlock()
+
+			// Publisher track ended: remove from subscribers and renegotiate
+			subs := rm.others(p.id)
+			for _, sub := range subs {
+				k := senderKey(pubID, trackID)
+				sub.sendersMu.Lock()
+				if snd, ok := sub.senders[k]; ok {
+					_ = sub.pc.RemoveTrack(snd)
+					delete(sub.senders, k)
+				}
+				if kind == webrtc.RTPCodecTypeVideo {
+					delete(sub.localVideo, k)
+				} else {
+					delete(sub.localAudio, k)
+				}
+				sub.sendersMu.Unlock()
+
+				requestNegotiation(sub)
 			}
 		}()
 	})
 
-	// --- ICE candidate buffering, SDP negotiation ---
-	var remoteDescSet bool
-	var candQueueMu sync.Mutex
-
-	// --- Handle signaling messages from client ---
-	for {
-		_, raw, err := ws.ReadMessage()
-		if err != nil {
-			break // client gone
+	p.pc.OnConnectionStateChange(func(s webrtc.PeerConnectionState) {
+		if s == webrtc.PeerConnectionStateFailed || s == webrtc.PeerConnectionStateClosed {
+			_ = p.conn.WriteMessage(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""))
+			_ = p.conn.Close()
 		}
-		var msg map[string]interface{}
-		if err := json.Unmarshal(raw, &msg); err != nil {
+	})
+
+}
+
+/* --------------------------- Negotiation machinery -------------------------- */
+
+func requestNegotiation(p *sfuPeer) {
+	select {
+	case p.negCh <- struct{}{}: // signal
+	default: // coalesce
+	}
+}
+
+func negotiatorWorker(p *sfuPeer) {
+	for {
+		select {
+		case <-p.negCh:
+			// coalesce bursts
+			for {
+				select {
+				case <-p.negCh:
+				default:
+					goto DO_NEGOTIATE
+				}
+			}
+		case <-p.closed:
+			return
+		}
+
+	DO_NEGOTIATE:
+		// Wait until stable to avoid glare
+		for p.pc.SignalingState() != webrtc.SignalingStateStable {
+			time.Sleep(15 * time.Millisecond)
+			select {
+			case <-p.closed:
+				return
+			default:
+			}
+		}
+
+		offer, err := p.pc.CreateOffer(nil)
+		if err != nil {
 			continue
 		}
-		typ, _ := msg["type"].(string)
-		switch typ {
-		case "offer":
-			offer := decodeSDP(msg["offer"])
-			state := pc.SignalingState()
-			if state != webrtc.SignalingStateStable {
-				// Rollback local description so we can accept the new offer
-				log.Printf("[SFU] In %s, rolling back before accepting new offer from %s", state, myClient.id)
-				if err := pc.SetLocalDescription(webrtc.SessionDescription{Type: webrtc.SDPTypeRollback}); err != nil {
-					log.Printf("SFU: Rollback failed: %v", err)
-					// If rollback fails, best effort: continue and try to set remote desc anyway
-				}
-			}
+		if err := p.pc.SetLocalDescription(offer); err != nil {
+			// If glare sneaks in, try again on next signal
+			continue
+		}
+		sendJSON(p, sfuMessage{Type: "offer", Offer: p.pc.LocalDescription()})
+	}
+}
 
-			if err := pc.SetRemoteDescription(offer); err != nil {
-				log.Println("SFU: SetRemoteDescription error:", err)
-				continue
-			}
-			remoteDescSet = true
-			// Flush any queued candidates now that remote desc is set
-			candQueueMu.Lock()
-			for _, cand := range myClient.candQueue {
-				if err := pc.AddICECandidate(cand); err != nil {
-					log.Printf("SFU: Queued AddICECandidate error: %v", err)
-				}
-			}
-			myClient.candQueue = nil
-			candQueueMu.Unlock()
+/* --------------------------- WS read/write pumps --------------------------- */
 
-			answer, err := pc.CreateAnswer(nil)
-			if err != nil {
-				log.Println("SFU: CreateAnswer error:", err)
-				continue
-			}
-			if err := pc.SetLocalDescription(answer); err != nil {
-				log.Println("SFU: SetLocalDescription error:", err)
-				continue
-			}
-			resp := map[string]interface{}{
-				"type":   "answer",
-				"answer": pc.LocalDescription(),
-			}
-			myClient.send <- resp
-			log.Printf("[SFU] Offer accepted and answered for %s", myClient.id)
+func writePumpSFU(p *sfuPeer) {
+	defer func() {
+		close(p.closed)
+		_ = p.conn.Close()
+	}()
 
-			// After sending answer, attempt negotiation if anything is queued
-			// go triggerNegotiationIfStable(myClient)
-		case "answer":
-			log.Printf("[SFU] Got answer from %s, state before: %s", myClient.id, pc.SignalingState())
-			ans := decodeSDP(msg["answer"])
-			if err := pc.SetRemoteDescription(ans); err != nil {
-				log.Println("SFU: SetRemoteDescription error (answer):", err)
-				continue
-			}
-			log.Printf("[SFU] Applied answer for %s, state now: %s", myClient.id, pc.SignalingState())
+	for msg := range p.send {
+		if err := p.conn.WriteMessage(websocket.TextMessage, msg); err != nil {
+			log.Printf("[SFU] write error: %v", err)
+			return
+		}
+	}
+}
 
-			// Optionally flush candidates here, if you have any buffered (unlikely, but safe):
-			candQueueMu.Lock()
-			for _, cand := range myClient.candQueue {
-				if err := pc.AddICECandidate(cand); err != nil {
-					log.Printf("SFU: Queued AddICECandidate error: %v", err)
-				}
-			}
-			myClient.candQueue = nil
-			candQueueMu.Unlock()
+func readPumpSFU(p *sfuPeer, rm *sfuRoom) {
+	defer func() {
+		// On reader exit, let SfuWebsocketHandler handle final cleanup
+	}()
 
-			// After answer, check for queued negotiation
-			// go triggerNegotiationIfStable(myClient)
-
-		case "candidate":
-			cand := decodeICE(msg["candidate"])
-			if !remoteDescSet || pc.RemoteDescription() == nil {
-				// Buffer until remote desc is set
-				candQueueMu.Lock()
-				myClient.candQueue = append(myClient.candQueue, cand)
-				candQueueMu.Unlock()
-				log.Printf("[SFU] Buffered ICE candidate from %s (remote desc not set)", myClient.id)
-			} else {
-				if err := pc.AddICECandidate(cand); err != nil {
-					log.Printf("SFU: AddICECandidate error: %v", err)
-				}
-			}
-		case "leave":
-			log.Printf("[SFU] Client %s left", myClient.id)
+	for {
+		_, raw, err := p.conn.ReadMessage()
+		if err != nil {
 			break
 		}
-	}
+		var msg sfuMessage
+		if err := json.Unmarshal(raw, &msg); err != nil {
+			log.Printf("[SFU] bad JSON: %v", err)
+			continue
+		}
 
-	// --- Cleanup on disconnect ---
-	sfuRoomHub.mu.Lock()
-	delete(sfuRoomHub.clients, myClient.id)
-	sfuRoomHub.mu.Unlock()
-	log.Printf("[SFU] Client %s cleaned up.", myClient.id)
-	close(myClient.send)
+		switch msg.Type {
+		case "offer":
+			// Client is offering → server answers
+			offer := *msg.Offer
+			// If not stable, roll back before new offer (glare-safe)
+			if p.pc.SignalingState() != webrtc.SignalingStateStable {
+				_ = p.pc.SetLocalDescription(webrtc.SessionDescription{Type: webrtc.SDPTypeRollback})
+			}
+			if err := p.pc.SetRemoteDescription(offer); err != nil {
+				log.Printf("[SFU] SetRemoteDescription(offer) err: %v", err)
+				continue
+			}
+			p.candMu.Lock()
+			p.remoteSet = true
+			// Flush queued ICE candidates
+			for _, c := range p.candQueue {
+				_ = p.pc.AddICECandidate(c)
+			}
+			p.candQueue = nil
+			p.candMu.Unlock()
+
+			answer, err := p.pc.CreateAnswer(nil)
+			if err != nil {
+				log.Printf("[SFU] CreateAnswer err: %v", err)
+				continue
+			}
+			if err := p.pc.SetLocalDescription(answer); err != nil {
+				log.Printf("[SFU] SetLocalDescription(answer) err: %v", err)
+				continue
+			}
+			sendJSON(p, sfuMessage{Type: "answer", Answer: p.pc.LocalDescription()})
+
+		case "answer":
+			// Server had sent an offer → client answers
+			ans := *msg.Answer
+			if err := p.pc.SetRemoteDescription(ans); err != nil {
+				log.Printf("[SFU] SetRemoteDescription(answer) err: %v", err)
+				continue
+			}
+			p.candMu.Lock()
+			p.remoteSet = true
+			for _, c := range p.candQueue {
+				_ = p.pc.AddICECandidate(c)
+			}
+			p.candQueue = nil
+			p.candMu.Unlock()
+
+		case "candidate":
+			ice := *msg.Candidate
+			p.candMu.Lock()
+			if !p.remoteSet || p.pc.RemoteDescription() == nil {
+				p.candQueue = append(p.candQueue, ice)
+				p.candMu.Unlock()
+				continue
+			}
+			p.candMu.Unlock()
+			if err := p.pc.AddICECandidate(ice); err != nil {
+				log.Printf("[SFU] AddICECandidate err: %v", err)
+			}
+
+		case "leave":
+			return
+		}
+	}
 }
 
-// func triggerNegotiationIfStable(c *sfuClient) {
-// 	c.restartMu.Lock()
-// 	defer c.restartMu.Unlock()
-// 	if c.needsNegotiation && c.pc.SignalingState() == webrtc.SignalingStateStable {
-// 		c.needsNegotiation = false
-// 		offer, err := c.pc.CreateOffer(nil)
-// 		if err != nil {
-// 			log.Printf("[SFU] CreateOffer failed: %v", err)
-// 			return
-// 		}
-// 		if err := c.pc.SetLocalDescription(offer); err != nil {
-// 			log.Printf("[SFU] SetLocalDescription failed: %v", err)
-// 			return
-// 		}
-// 		c.send <- map[string]interface{}{"type": "offer", "offer": c.pc.LocalDescription()}
-// 		log.Printf("[SFU] Negotiation offer sent to %s", c.id)
-// 	}
-// }
+/* ---------------------------- ICE restart (server) ---------------------------- */
 
-func decodeSDP(val interface{}) webrtc.SessionDescription {
-	if sdpMap, ok := val.(map[string]interface{}); ok {
-		return webrtc.SessionDescription{
-			Type: webrtc.NewSDPType(sdpMap["type"].(string)),
-			SDP:  sdpMap["sdp"].(string),
-		}
-	}
-	return webrtc.SessionDescription{}
-}
-
-func decodeICE(val interface{}) webrtc.ICECandidateInit {
-	if iceMap, ok := val.(map[string]interface{}); ok {
-		c := webrtc.ICECandidateInit{}
-		if s, ok := iceMap["candidate"].(string); ok {
-			c.Candidate = s
-		}
-		if s, ok := iceMap["sdpMid"].(string); ok {
-			c.SDPMid = &s
-		}
-		if n, ok := iceMap["sdpMLineIndex"].(float64); ok {
-			u := uint16(n)
-			c.SDPMLineIndex = &u
-		}
-		return c
-	}
-	return webrtc.ICECandidateInit{}
-}
-
-// ICE restart logic (for failed ICE)
-func sfuRestartICE(client *sfuClient) {
-	client.restartMu.Lock()
-	defer client.restartMu.Unlock()
-	if client.hasFailedICE {
-		return // only one restart at a time
-	}
-	client.hasFailedICE = true
-	defer func() { client.hasFailedICE = false }()
-
-	if client.pc.SignalingState() != webrtc.SignalingStateStable {
-		log.Printf("[SFU] ICE restart: PC not stable for %s, skipping", client.id)
+func sfuRestartICE(p *sfuPeer) {
+	p.restartMu.Lock()
+	if p.iceRestartIn {
+		p.restartMu.Unlock()
 		return
 	}
+	p.iceRestartIn = true
+	p.restartMu.Unlock()
 
-	log.Printf("[SFU] Restarting ICE for %s", client.id)
-	offer, err := client.pc.CreateOffer(&webrtc.OfferOptions{ICERestart: true})
+	defer func() {
+		p.restartMu.Lock()
+		p.iceRestartIn = false
+		p.restartMu.Unlock()
+	}()
+
+	if p.pc.SignalingState() != webrtc.SignalingStateStable {
+		return
+	}
+	offer, err := p.pc.CreateOffer(&webrtc.OfferOptions{ICERestart: true})
 	if err != nil {
-		log.Printf("[SFU] ICE restart CreateOffer: %v", err)
 		return
 	}
-	if err := client.pc.SetLocalDescription(offer); err != nil {
-		log.Printf("[SFU] ICE restart SetLocalDescription: %v", err)
+	if err := p.pc.SetLocalDescription(offer); err != nil {
 		return
 	}
-	client.send <- map[string]interface{}{
-		"type":  "offer",
-		"offer": client.pc.LocalDescription(),
-	}
-	log.Printf("[SFU] ICE-restart offer sent to %s", client.id)
+	sendJSON(p, sfuMessage{Type: "offer", Offer: p.pc.LocalDescription()})
 }
 
-// Random SFU ID
+/* ----------------------------- Utilities & RTCP ----------------------------- */
+
+func senderKey(pubID, trackID string) string {
+	return pubID + "|" + trackID
+}
+
+func sendJSON(p *sfuPeer, v interface{}) {
+	raw, err := json.Marshal(v)
+	if err != nil {
+		return
+	}
+	select {
+	case p.send <- raw:
+	case <-p.closed:
+	default:
+		log.Printf("[SFU] send queue overflow for %s; dropping", p.id)
+	}
+}
+
+func ptr[T any](v T) *T { return &v }
+
+// Relay PLIs from a subscriber's RTPSender back to the publisher PC.
+func relayRTCPToPublisher(subSender *webrtc.RTPSender, pubTrack *webrtc.TrackRemote, pubPC *webrtc.PeerConnection) {
+	if pubPC == nil || pubTrack == nil {
+		return
+	}
+	for {
+		pkts, n, err := subSender.ReadRTCP()
+		if err != nil {
+			return
+		}
+		_ = n
+		for _, pkt := range pkts {
+			switch p := pkt.(type) {
+			case *rtcp.PictureLossIndication:
+				p.MediaSSRC = uint32(pubTrack.SSRC())
+				_ = pubPC.WriteRTCP([]rtcp.Packet{p})
+			case *rtcp.FullIntraRequest:
+				p.MediaSSRC = uint32(pubTrack.SSRC())
+				_ = pubPC.WriteRTCP([]rtcp.Packet{p})
+			}
+		}
+	}
+}
+
+/* --------------------------------- Helpers --------------------------------- */
+
 func randomSFUID() string {
 	return fmt.Sprintf("sfu-%d", rand.Intn(100000))
+}
+
+func attachExistingPublishersTo(sub *sfuPeer, rm *sfuRoom) {
+	rm.mu.Lock()
+	// copy pointers you need while holding lock
+	pubs := make([]*pubTrack, 0, 8)
+	for _, tracks := range rm.pubs {
+		for _, pt := range tracks {
+			pubs = append(pubs, pt)
+		}
+	}
+	rm.mu.Unlock()
+
+	for _, pt := range pubs {
+		// Don't attach a user's own published tracks back to themselves
+		if pt.pubID == sub.id {
+			continue
+		}
+
+		codec := pt.remote.Codec().RTPCodecCapability
+		out, err := webrtc.NewTrackLocalStaticRTP(codec, pt.trackID, pt.pubID)
+		if err != nil {
+			continue
+		}
+
+		sender, err := sub.pc.AddTrack(out)
+		if err != nil {
+			continue
+		}
+
+		key := senderKey(pt.pubID, pt.trackID)
+		sub.sendersMu.Lock()
+		sub.senders[key] = sender
+		if pt.kind == webrtc.RTPCodecTypeVideo {
+			sub.localVideo[key] = out
+		} else {
+			sub.localAudio[key] = out
+		}
+		sub.sendersMu.Unlock()
+
+		// optional: PLI/FIR relay
+		go relayRTCPToPublisher(sender, pt.remote, pt.pubPC)
+	}
+
+	// Ask subscriber to renegotiate once (coalesced)
+	requestNegotiation(sub)
 }
