@@ -170,7 +170,6 @@ func lobbyWebsocket(registry *CommandRegistry) func(http.ResponseWriter, *http.R
 
 			// Clear trick and advance phase
 			game.PlayedCards = nil
-			game.NextPhase() // → TrickStart or RoundEnd
 			game.NextPhase()
 			engine.TriggerHook(HookOnPhaseEnter, game, nil)
 
