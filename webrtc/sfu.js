@@ -7,8 +7,10 @@ let myName = "";
 let ws, pc, localStream;
 let globalIceServers = [];
 let candidateQueue = [];
+const MAX_CAND_QUEUE = 2048;
 let remoteDescSet = false;
 const remoteTrackMap = {};
+const remoteByStream = new Map();
 
 window.addEventListener("beforeunload", () => {
     try { if (ws?.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: "leave" })); } catch { }
@@ -116,6 +118,11 @@ async function connectSFUSocket() {
         Logger.info("[SFU] WS open", { room: ROOM, id: myUUID });
         pc = new RTCPeerConnection({ iceServers: globalIceServers });
 
+        try {
+            pc.addTransceiver('audio', { direction: 'recvonly' });
+            pc.addTransceiver('video', { direction: 'recvonly' });
+        } catch { }
+
         pc.onconnectionstatechange = () => {
             Logger.info("PC state", pc.connectionState);
             if (pc.connectionState === "failed" || pc.connectionState === "closed") teardownPeer();
@@ -124,32 +131,101 @@ async function connectSFUSocket() {
         // Add local tracks (triggers negotiationneeded)
         if (localStream) for (const t of localStream.getTracks()) pc.addTrack(t, localStream);
 
-        pc.onnegotiationneeded = () => { maybeMakeOffer(); };
+        let negScheduled = false;
+        pc.onnegotiationneeded = () => {
+            if (negScheduled) return;
+            negScheduled = true;
+            queueMicrotask(async () => {
+                negScheduled = false;
+                await maybeMakeOffer();
+            });
+        };
 
         pc.ontrack = ({ track, streams }) => {
             const stream = streams?.[0] || new MediaStream([track]);
-            if (!remoteTrackMap[track.id]) {
-                if (track.kind === "video") {
-                    const el = Object.assign(document.createElement("video"), {
-                        id: `remote-video-${track.id}`, srcObject: stream, autoplay: true, playsInline: true,
-                    });
-                    el.classList.add("remote-video");
-                    document.getElementById("videos").appendChild(el);
-                    remoteTrackMap[track.id] = { element: el, kind: "video" };
-                } else {
-                    const el = Object.assign(document.createElement("audio"), { autoplay: true, srcObject: stream });
-                    document.body.appendChild(el);
-                    remoteTrackMap[track.id] = { element: el, kind: "audio" };
-                }
+            const pubID = stream.id; // set by SFU when it created the local static track
+
+            // create element
+            let el;
+            if (track.kind === "video") {
+                el = Object.assign(document.createElement("video"), {
+                    id: `remote-video-${track.id}`,
+                    srcObject: stream,
+                    autoplay: true,
+                    playsInline: true,
+                });
+                el.classList.add("remote-video");
+                document.getElementById("videos").appendChild(el);
+            } else {
+                el = Object.assign(document.createElement("audio"), {
+                    autoplay: true,
+                    srcObject: stream,
+                });
+                document.body.appendChild(el);
             }
-            track.onended = () => {
-                const item = remoteTrackMap[track.id];
-                if (item?.element) item.element.remove();
+
+            // index by track & by stream
+            remoteTrackMap[track.id] = { element: el, kind: track.kind, pubID };
+            if (!remoteByStream.has(pubID)) remoteByStream.set(pubID, new Set());
+            remoteByStream.get(pubID).add(el);
+            el.dataset.streamId = pubID;
+
+            const cleanup = () => {
+                // remove the specific element
+                if (remoteTrackMap[track.id]?.element) {
+                    try { remoteTrackMap[track.id].element.srcObject = null; } catch { }
+                    remoteTrackMap[track.id].element.remove();
+                }
                 delete remoteTrackMap[track.id];
+
+                // if the stream has no visible elements left, drop it from map
+                const set = remoteByStream.get(pubID);
+                if (set) {
+                    set.delete(el);
+                    if (set.size === 0) remoteByStream.delete(pubID);
+                }
             };
+
+            // multiple signals can happen depending on browser
+            track.onended = cleanup;
+            track.onmute = () => {
+                // If a track is permanently removed server-side, browsers often mute then end.
+                // Quick heuristic: if readyState becomes 'ended', cleanup now.
+                if (track.readyState === "ended") cleanup();
+            };
+            stream.addEventListener("removetrack", () => {
+                if (!stream.getTracks().length) cleanup();
+            }, { once: false });
         };
 
-        pc.onicecandidate = (e) => { if (e.candidate) ws.send(JSON.stringify({ type: "candidate", candidate: e.candidate })); };
+        pc.onicecandidate = (e) => {
+            if (!pc.localDescription) return;
+            if (e.candidate) {
+                ws.send(JSON.stringify({ type: "candidate", candidate: e.candidate }));
+            } else {
+                ws.send(JSON.stringify({ type: "candidate", candidate: null }));
+            }
+        };
+
+        let iceRestartTimer;
+        pc.oniceconnectionstatechange = () => {
+            const s = pc.iceConnectionState;
+            if (s === 'disconnected') {
+                clearTimeout(iceRestartTimer);
+                iceRestartTimer = setTimeout(async () => {
+                    if (pc.signalingState === 'stable') {
+                        try {
+                            await pc.setLocalDescription(await pc.createOffer({ iceRestart: true }));
+                            const ld = pc.localDescription;
+                            ws.send(JSON.stringify({ type: 'offer', offer: { type: ld.type, sdp: ld.sdp }, name: myName }));
+                        } catch (e) { /* ignore */ }
+                    }
+                }, 2000);
+            } else if (s === 'failed' || s === 'connected' || s === 'completed') {
+                clearTimeout(iceRestartTimer);
+            }
+        };
+
     };
 
     ws.onmessage = async ({ data }) => {
@@ -159,18 +235,15 @@ async function connectSFUSocket() {
             const offerCollision = makingOffer || pc.signalingState !== "stable";
             const ignoreOffer = !polite && offerCollision;
             if (ignoreOffer) return;
-
             try {
-                if (offerCollision) await pc.setLocalDescription({ type: "rollback" });
+                if (offerCollision) {
+                    remoteDescSet = false;
+                    await pc.setLocalDescription({ type: "rollback" });
+                }
                 await pc.setRemoteDescription(msg.offer);
                 await pc.setLocalDescription(await pc.createAnswer());
-
                 const ld = pc.localDescription;
-                ws.send(JSON.stringify({
-                    type: "answer",
-                    answer: { type: ld.type, sdp: ld.sdp }
-                }));
-
+                ws.send(JSON.stringify({ type: "answer", answer: { type: ld.type, sdp: ld.sdp } }));
                 remoteDescSet = true;
                 for (const c of candidateQueue) { try { await pc.addIceCandidate(c); } catch { } }
                 candidateQueue = [];
@@ -179,7 +252,6 @@ async function connectSFUSocket() {
             }
             return;
         }
-
 
         if (msg.type === "answer") {
             try {
@@ -193,12 +265,43 @@ async function connectSFUSocket() {
             return;
         }
 
-
         if (msg.type === "candidate") {
+            if (!msg.candidate) {
+                try { await pc.addIceCandidate(null); } catch { }
+                return;
+            }
             if (!remoteDescSet || !pc.remoteDescription) {
-                candidateQueue.push(msg.candidate);
+                if (candidateQueue.length < MAX_CAND_QUEUE) {
+                    candidateQueue.push(msg.candidate);
+                } else {
+                    // optional: log once or drop silently
+                    Logger.warn("[SFU] candidateQueue cap reached; dropping candidate");
+                }
             } else {
                 try { await pc.addIceCandidate(msg.candidate); } catch (e) { Logger.error("[SFU] addIceCandidate failed", e); }
+            }
+
+            return;
+        }
+
+        if (msg.type === "peer-left" && msg.from) {
+            const pubID = msg.from;
+            // Remove all elements for this publisher immediately
+            const set = remoteByStream.get(pubID);
+            if (set) {
+                for (const el of set) {
+                    try { el.srcObject = null; } catch { }
+                    el.remove();
+                }
+                remoteByStream.delete(pubID);
+            }
+            // Also purge any track-indexed leftovers just in case
+            for (const [tid, rec] of Object.entries(remoteTrackMap)) {
+                if (rec.pubID === pubID) {
+                    try { rec.element.srcObject = null; } catch { }
+                    rec.element.remove();
+                    delete remoteTrackMap[tid];
+                }
             }
             return;
         }

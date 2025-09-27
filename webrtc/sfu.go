@@ -241,6 +241,11 @@ func SfuWebsocketHandler(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	rm.broadcastExcept(p.id, sfuMessage{
+		Type: "peer-left",
+		From: p.id, // this matches the stream id you used as pubID
+	})
+
 	// Cleanup happens after readPump returns
 	rm.delPeer(p.id)
 	close(p.send)
@@ -265,6 +270,12 @@ func wirePeerEvents(p *sfuPeer, rm *sfuRoom) {
 		log.Printf("[SFU] ICE %s peer=%s", state.String(), p.id)
 		if state == webrtc.ICEConnectionStateFailed {
 			go sfuRestartICE(p)
+		}
+	})
+
+	p.pc.OnICEGatheringStateChange(func(s webrtc.ICEGatheringState) {
+		if s == webrtc.ICEGatheringStateComplete {
+			sendJSON(p, sfuMessage{Type: "candidate", Candidate: nil}) // end-of-candidates
 		}
 	})
 
@@ -393,41 +404,76 @@ func requestNegotiation(p *sfuPeer) {
 }
 
 func negotiatorWorker(p *sfuPeer) {
-	for {
-		select {
-		case <-p.negCh:
-			// coalesce bursts
-			for {
-				select {
-				case <-p.negCh:
-				default:
-					goto DO_NEGOTIATE
-				}
+	// Small debounce so multiple AddTrack/AddTransceiver events coalesce into one offer
+	const debounce = 25 * time.Millisecond
+
+	waitStable := func() bool {
+		// Spin until stable or closed
+		for {
+			if p.pc.SignalingState() == webrtc.SignalingStateStable {
+				return true
 			}
+			select {
+			case <-p.closed:
+				return false
+			case <-time.After(15 * time.Millisecond):
+			}
+		}
+	}
+
+	for {
+		// Block until someone requests negotiation or we are closed
+		select {
 		case <-p.closed:
+			return
+		case <-p.negCh:
+		}
+
+		// Debounce/coalesce any immediate follow-up signals
+		deadline := time.NewTimer(debounce)
+	coalesce:
+		for {
+			select {
+			case <-p.closed:
+				deadline.Stop()
+				return
+			case <-p.negCh:
+				// keep coalescing
+			case <-deadline.C:
+				break coalesce
+			}
+		}
+
+		// 1) Be stable before creating an offer (avoid self-glare)
+		if !waitStable() {
 			return
 		}
 
-	DO_NEGOTIATE:
-		// Wait until stable to avoid glare
-		for p.pc.SignalingState() != webrtc.SignalingStateStable {
-			time.Sleep(15 * time.Millisecond)
-			select {
-			case <-p.closed:
-				return
-			default:
-			}
-		}
-
+		// 2) Create the offer
 		offer, err := p.pc.CreateOffer(nil)
 		if err != nil {
+			// Try again on the next negotiation request
 			continue
 		}
+
+		// 3) If we became unstable during offer creation, drop this one
+		if p.pc.SignalingState() != webrtc.SignalingStateStable {
+			continue
+		}
+
+		// 4) Try to set local description; if this races with an incoming offer,
+		//    SetLocalDescription can fail — simply retry on the next signal.
 		if err := p.pc.SetLocalDescription(offer); err != nil {
-			// If glare sneaks in, try again on next signal
 			continue
 		}
-		sendJSON(p, sfuMessage{Type: "offer", Offer: p.pc.LocalDescription()})
+
+		// 5) Send the exact SDP we set (ensures ICE ufrag/pwd, DTLS fp present)
+		if ld := p.pc.LocalDescription(); ld != nil {
+			sendJSON(p, sfuMessage{
+				Type:  "offer",
+				Offer: ld,
+			})
+		}
 	}
 }
 
@@ -448,6 +494,8 @@ func writePumpSFU(p *sfuPeer) {
 }
 
 func readPumpSFU(p *sfuPeer, rm *sfuRoom) {
+	const maxCandQueue = 4096
+
 	defer func() {
 		// On reader exit, let SfuWebsocketHandler handle final cleanup
 	}()
@@ -511,10 +559,16 @@ func readPumpSFU(p *sfuPeer, rm *sfuRoom) {
 			p.candMu.Unlock()
 
 		case "candidate":
+			if msg.Candidate == nil {
+				_ = p.pc.AddICECandidate(webrtc.ICECandidateInit{})
+				continue
+			}
 			ice := *msg.Candidate
 			p.candMu.Lock()
 			if !p.remoteSet || p.pc.RemoteDescription() == nil {
-				p.candQueue = append(p.candQueue, ice)
+				if len(p.candQueue) < maxCandQueue {
+					p.candQueue = append(p.candQueue, ice)
+				}
 				p.candMu.Unlock()
 				continue
 			}
@@ -553,6 +607,7 @@ func sfuRestartICE(p *sfuPeer) {
 	if err != nil {
 		return
 	}
+
 	if err := p.pc.SetLocalDescription(offer); err != nil {
 		return
 	}
@@ -654,4 +709,18 @@ func attachExistingPublishersTo(sub *sfuPeer, rm *sfuRoom) {
 
 	// Ask subscriber to renegotiate once (coalesced)
 	requestNegotiation(sub)
+}
+
+func (r *sfuRoom) broadcastExcept(senderID string, msg interface{}) {
+	r.mu.Lock()
+	subs := make([]*sfuPeer, 0, len(r.peers))
+	for id, p := range r.peers {
+		if id != senderID {
+			subs = append(subs, p)
+		}
+	}
+	r.mu.Unlock()
+	for _, sub := range subs {
+		sendJSON(sub, msg)
+	}
 }
