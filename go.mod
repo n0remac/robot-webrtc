@@ -7,11 +7,14 @@ require (
 	github.com/chromedp/chromedp v0.13.6
 	github.com/glebarez/go-sqlite v1.22.0
 	github.com/gorilla/websocket v1.5.3
+	github.com/pion/interceptor v0.1.37
+	github.com/pion/rtcp v1.2.15
 	github.com/pion/rtp v1.8.13
 	github.com/pion/webrtc/v4 v4.0.15
 	github.com/sashabaranov/go-openai v1.38.1
 	github.com/stianeikeland/go-rpio/v4 v4.6.0
 	github.com/tidwall/gjson v1.18.0
+	gocv.io/x/gocv v0.42.0
 	google.golang.org/grpc v1.64.0
 	google.golang.org/protobuf v1.33.0
 	gorm.io/driver/postgres v1.6.0
@@ -51,11 +54,9 @@ require (
 	github.com/pion/datachannel v1.5.10 // indirect
 	github.com/pion/dtls/v3 v3.0.6 // indirect
 	github.com/pion/ice/v4 v4.0.10 // indirect
-	github.com/pion/interceptor v0.1.37 // indirect
 	github.com/pion/logging v0.2.3 // indirect
 	github.com/pion/mdns/v2 v2.0.7 // indirect
 	github.com/pion/randutil v0.1.0 // indirect
-	github.com/pion/rtcp v1.2.15 // indirect
 	github.com/pion/sctp v1.8.38 // indirect
 	github.com/pion/sdp/v3 v3.0.11 // indirect
 	github.com/pion/srtp/v3 v3.0.4 // indirect

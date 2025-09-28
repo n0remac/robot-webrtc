@@ -1,15 +1,18 @@
 package webrtc
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"log"
 	"math/rand"
+	"net"
 	"net/http"
 	"sync"
 	"time"
 
 	"github.com/gorilla/websocket"
+	cvproc "github.com/n0remac/robot-webrtc/cvpipe"
 	wsock "github.com/n0remac/robot-webrtc/websocket"
 	"github.com/pion/interceptor"
 	"github.com/pion/rtcp"
@@ -62,6 +65,11 @@ type sfuPeer struct {
 	iceRestartIn bool
 
 	closed chan struct{}
+
+	procMu     sync.Mutex
+	procUDP    map[string]*net.UDPConn                // key pubID|trackID → UDP socket to pipeline input
+	procTracks map[string]*webrtc.TrackLocalStaticRTP // server-published processed track
+	procPipes  map[string]*cvproc.Pipeline
 }
 
 type pubTrack struct {
@@ -199,6 +207,9 @@ func SfuWebsocketHandler(w http.ResponseWriter, r *http.Request) {
 		localAudio: make(map[string]*webrtc.TrackLocalStaticRTP),
 		negCh:      make(chan struct{}, 1),
 		closed:     make(chan struct{}),
+		procUDP:    make(map[string]*net.UDPConn),
+		procPipes:  make(map[string]*cvproc.Pipeline),
+		procTracks: make(map[string]*webrtc.TrackLocalStaticRTP),
 	}
 
 	p.negOnce.Do(func() { go negotiatorWorker(p) })
@@ -286,6 +297,7 @@ func wirePeerEvents(p *sfuPeer, rm *sfuRoom) {
 		kind := remote.Kind()
 		log.Printf("[SFU] publish %s %s by %s", kind.String(), trackID, pubID)
 
+		// Register publisher track in room state
 		rm.mu.Lock()
 		if _, ok := rm.pubs[pubID]; !ok {
 			rm.pubs[pubID] = make(map[string]*pubTrack)
@@ -299,7 +311,7 @@ func wirePeerEvents(p *sfuPeer, rm *sfuRoom) {
 		}
 		rm.mu.Unlock()
 
-		// For each other peer in the room, create an outbound track + sender
+		// For each other peer in the room, create an outbound track + sender (normal fan-out)
 		others := rm.others(p.id)
 		for _, sub := range others {
 			codec := remote.Codec().RTPCodecCapability
@@ -324,14 +336,62 @@ func wirePeerEvents(p *sfuPeer, rm *sfuRoom) {
 			}
 			sub.sendersMu.Unlock()
 
-			// (Optional) RTCP relay for PLI/FIR — enable when ready.
+			// Optional: relay RTCP PLIs/FIRs back to publisher
 			go relayRTCPToPublisher(sender, remote, p.pc)
 
-			// Ask the subscriber to renegotiate (coalesced)
-			requestNegotiation(sub)
+			requestNegotiation(sub) // coalesced
 		}
 
-		// Forward RTP from publisher to all subscribers' local tracks
+		// ---------- spin up a CV pipeline and a server-published processed track ----------
+		var (
+			procKey = senderKey(pubID, trackID) // use same key for proc maps
+		)
+		if kind == webrtc.RTPCodecTypeVideo {
+			key := senderKey(pubID, trackID)
+			// Allocate a local UDP port for encoder RTP output
+			outPort := 7000 + rand.Intn(1000)
+
+			cfg := cvproc.Config{
+				Key: key,
+				W:   1280, H: 720, FPS: 30,
+				CodecPT:     uint8(remote.Codec().PayloadType),
+				OutPT:       uint8(remote.Codec().PayloadType),
+				OutTrackID:  trackID + "-proc",
+				OutStreamID: "server-proc",
+				OutRTPPort:  outPort,
+				H264Bitrate: "2500k",
+			}
+
+			// Start pipeline
+			pl, err := cvproc.StartH264(context.Background(), remote, sfu.api, cfg)
+			if err != nil {
+				log.Printf("[CV] start failed for %s: %v", key, err)
+			} else {
+				// Attach processed track to all *other* peers
+				others := rm.others(p.id)
+				for _, sub := range others {
+					snd, err := sub.pc.AddTrack(pl.TrackOut)
+					if err != nil {
+						log.Printf("[CV] add proc track to %s failed: %v", sub.id, err)
+						continue
+					}
+					k2 := senderKey("server-proc", cfg.OutTrackID)
+					sub.sendersMu.Lock()
+					sub.senders[k2] = snd
+					sub.localVideo[k2] = pl.TrackOut
+					sub.sendersMu.Unlock()
+					requestNegotiation(sub)
+				}
+
+				p.procMu.Lock()
+				p.procPipes[key] = pl
+				p.procTracks[key] = pl.TrackOut
+				p.procMu.Unlock()
+			}
+		}
+		// ---------- end NEW ----------
+
+		// Forward RTP from publisher to all subscribers' local tracks (+ mirror to CV input)
 		go func() {
 			buf := make([]byte, 1500)
 			for {
@@ -339,7 +399,7 @@ func wirePeerEvents(p *sfuPeer, rm *sfuRoom) {
 				if err != nil {
 					break
 				}
-				// Fan-out payload to each subscriber's outbound track for this publisher
+				// 1) Normal SFU fan-out
 				subs := rm.others(p.id)
 				for _, sub := range subs {
 					var out *webrtc.TrackLocalStaticRTP
@@ -353,8 +413,19 @@ func wirePeerEvents(p *sfuPeer, rm *sfuRoom) {
 						_, _ = out.Write(buf[:n])
 					}
 				}
+
+				// 2) NEW: mirror raw publisher RTP to CV pipeline input
+				if kind == webrtc.RTPCodecTypeVideo {
+					p.procMu.Lock()
+					udp := p.procUDP[procKey]
+					p.procMu.Unlock()
+					if udp != nil {
+						_, _ = udp.Write(buf[:n])
+					}
+				}
 			}
 
+			// Cleanup publisher registration
 			rm.mu.Lock()
 			if tracks, ok := rm.pubs[pubID]; ok {
 				delete(tracks, trackID)
@@ -364,7 +435,7 @@ func wirePeerEvents(p *sfuPeer, rm *sfuRoom) {
 			}
 			rm.mu.Unlock()
 
-			// Publisher track ended: remove from subscribers and renegotiate
+			// Remove normal fan-out tracks from subscribers
 			subs := rm.others(p.id)
 			for _, sub := range subs {
 				k := senderKey(pubID, trackID)
@@ -379,9 +450,37 @@ func wirePeerEvents(p *sfuPeer, rm *sfuRoom) {
 					delete(sub.localAudio, k)
 				}
 				sub.sendersMu.Unlock()
-
 				requestNegotiation(sub)
 			}
+
+			// tear down CV pipeline and remove processed track
+			if kind == webrtc.RTPCodecTypeVideo {
+				key := senderKey(pubID, trackID)
+
+				p.procMu.Lock()
+				pl := p.procPipes[key]
+				delete(p.procPipes, key)
+				delete(p.procTracks, key)
+				p.procMu.Unlock()
+
+				if pl != nil {
+					pl.Stop()
+				}
+
+				subs := rm.others(p.id)
+				for _, sub := range subs {
+					k2 := senderKey("server-proc", trackID+"-proc")
+					sub.sendersMu.Lock()
+					if snd, ok := sub.senders[k2]; ok {
+						_ = sub.pc.RemoveTrack(snd)
+						delete(sub.senders, k2)
+					}
+					delete(sub.localVideo, k2)
+					sub.sendersMu.Unlock()
+					requestNegotiation(sub)
+				}
+			}
+
 		}()
 	})
 
