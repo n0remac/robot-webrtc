@@ -1,11 +1,13 @@
-// cvproc/pipeline.go
-package cvproc
+// cvpipe/pipeline.go
+package cvpipe
 
 import (
 	"bufio"
 	"bytes"
 	"context"
 	"fmt"
+	"image"
+	"image/color"
 	"io"
 	"log"
 	"net"
@@ -19,6 +21,22 @@ import (
 	"github.com/pion/rtp"
 	"github.com/pion/webrtc/v4"
 )
+
+type Box struct {
+	X int `json:"x"`
+	Y int `json:"y"`
+	W int `json:"w"`
+	H int `json:"h"`
+}
+
+type BoxesEvent struct {
+	PubID    string `json:"pubId"`
+	TrackID  string `json:"trackId"`
+	W        int    `json:"w"`
+	H        int    `json:"h"`
+	TsUnixMs int64  `json:"ts"`
+	Boxes    []Box  `json:"boxes"`
+}
 
 type Pipeline struct {
 	Key       string // pubID|trackID
@@ -50,6 +68,8 @@ type Pipeline struct {
 	InRTPConn net.Conn
 
 	FirstRawFrame chan struct{}
+
+	Boxes chan BoxesEvent
 }
 
 type Config struct {
@@ -65,6 +85,9 @@ type Config struct {
 
 	InRTPPort int   // UDP port for RTP IN (publisher → decoder)
 	InPT      uint8 // publisher's H264 payload type (for udpsrc caps)
+
+	PubID   string // for logging
+	TrackID string // for logging
 }
 
 func StartH264(ctx context.Context, cfg Config) (*Pipeline, error) {
@@ -159,6 +182,7 @@ func StartH264(ctx context.Context, cfg Config) (*Pipeline, error) {
 		cancel:        cancel,
 		subs:          make(map[chan *rtp.Packet]struct{}),
 		FirstRawFrame: make(chan struct{}),
+		Boxes:         make(chan BoxesEvent, 32),
 	}
 
 	// keep gst debug if you like
@@ -190,7 +214,7 @@ func StartH264(ctx context.Context, cfg Config) (*Pipeline, error) {
 		return nil, fmt.Errorf("start encoder: %w", err)
 	}
 
-	// ---------- 4) Read decoder raw BGR → (optional CV) → write to encoder stdin ----------
+	// ---------- 4) Read decoder raw BGR → CV (gray/clahe/detect) → write to encoder stdin ----------
 	pl.wg.Add(1)
 	go func() {
 		defer pl.wg.Done()
@@ -200,16 +224,30 @@ func StartH264(ctx context.Context, cfg Config) (*Pipeline, error) {
 		frameBytes := cfg.W * cfg.H * 3
 		buf := make([]byte, frameBytes)
 
-		// classifier := gocv.NewCascadeClassifier()
-		// defer classifier.Close()
-		// loaded := classifier.Load("haarcascade_frontalface_default.xml")
-		// if !loaded {
-		// 	log.Printf("[CV] WARNING: could not load Haarcascade; passing frames through without boxes")
-		// }
+		// --- Haar cascade ---
+		classifier := gocv.NewCascadeClassifier()
+		defer classifier.Close()
+		loaded := classifier.Load("haarcascade_frontalface_default.xml")
+		if !loaded {
+			log.Printf("[CV] WARNING: could not load Haarcascade; proceeding without detection")
+		}
 
-		// boxColor := color.RGBA{0, 255, 0, 255}
+		// --- Working Mats (reused per frame) ---
 		gray := gocv.NewMat()
 		defer gray.Close()
+		small := gocv.NewMat()
+		defer small.Close()
+
+		// (optional) if you want to draw boxes on the output video
+		boxColor := color.RGBA{0, 255, 0, 255}
+
+		// CLAHE to improve local contrast for face detection
+		clahe := gocv.NewCLAHEWithParams(2.0, image.Pt(8, 8)) // clipLimit=2.0, tileGrid=8x8
+		defer clahe.Close()
+
+		// Downscale factor for detector to reduce CPU (tune as needed)
+		const detScale = 0.5
+		minDetSize := image.Pt(30, 30) // minimum face size at detection scale
 
 		firstFrame := true
 		goodFrames := 0
@@ -242,32 +280,89 @@ func StartH264(ctx context.Context, cfg Config) (*Pipeline, error) {
 			framesSec++
 			bytesSec += frameBytes
 			if time.Since(tick) >= time.Second {
-				log.Printf("[CV] decoder raw frames in last 1s: %d (W=%d H=%d); wrote-to-enc bytes=%.2f MiB",
-					framesSec, cfg.W, cfg.H, float64(bytesSec)/(1024*1024))
+				// log.Printf("[CV] decoder raw frames in last 1s: %d (W=%d H=%d); wrote-to-enc bytes=%.2f MiB",
+				// 	framesSec, cfg.W, cfg.H, float64(bytesSec)/(1024*1024))
 				framesSec, bytesSec = 0, 0
 				tick = time.Now()
 			}
 
+			// Convert bytes → BGR Mat
 			mat, err := bytesToMatBGR(buf, pl.W, pl.H)
 			if err != nil {
 				log.Printf("[CV] bytesToMatBGR failed: %v", err)
 				return
 			}
 
-			// Convert to grayscale
-			// gocv.CvtColor(mat, &gray, gocv.ColorBGRToGray)
-			// Convert back to 3-channel BGR so encoder still gets expected format
-			// gocv.CvtColor(gray, &mat, gocv.ColorGrayToBGR)
+			// --- Preprocess for Haar: BGR -> Gray -> Denoise -> Contrast enhance (CLAHE) ---
+			gocv.CvtColor(mat, &gray, gocv.ColorBGRToGray)
+			// Light blur to reduce noise (helps cascades)
+			gocv.GaussianBlur(gray, &gray, image.Pt(5, 5), 0, 0, gocv.BorderDefault)
+			// CLAHE enhances local contrast (faces pop more in varied lighting)
+			clahe.Apply(gray, &gray)
 
-			// // Haar cascade detection — commented out
-			// if loaded {
-			// 	gocv.EqualizeHist(gray, &gray)
-			// 	rects := classifier.DetectMultiScaleWithParams(gray, 1.1, 5, 0, image.Pt(30, 30), image.Pt(0, 0))
-			// 	for _, r := range rects {
-			// 		gocv.Rectangle(&mat, r, boxColor, 3)
-			// 	}
-			// }
+			// --- Downscale for faster detection ---
+			if detScale != 1.0 {
+				w := int(float64(pl.W) * detScale)
+				h := int(float64(pl.H) * detScale)
+				gocv.Resize(gray, &small, image.Pt(w, h), 0, 0, gocv.InterpolationArea)
+			} else {
+				gray.CopyTo(&small)
+			}
 
+			// --- Detect faces ---
+			var rects []image.Rectangle
+			if loaded {
+				// tune params if needed:
+				// scaleFactor=1.1, minNeighbors=5, flags=0, minSize=30x30 (at detScale)
+				rects = classifier.DetectMultiScaleWithParams(
+					small,
+					1.1, 5, 0,
+					minDetSize, image.Pt(0, 0),
+				)
+			}
+
+			log.Printf("[CV] detected %d faces", len(rects))
+
+			// --- Rescale rects back to full resolution ---
+			if len(rects) > 0 && detScale != 1.0 {
+				inv := 1.0 / detScale
+				for i := range rects {
+					r := rects[i]
+					rects[i] = image.Rect(
+						int(float64(r.Min.X)*inv),
+						int(float64(r.Min.Y)*inv),
+						int(float64(r.Max.X)*inv),
+						int(float64(r.Max.Y)*inv),
+					)
+				}
+			}
+
+			// --- OPTIONAL: draw boxes onto the outgoing video (remove if you only want metadata) ---
+			for _, r := range rects {
+				gocv.Rectangle(&mat, r, boxColor, 3)
+			}
+
+			// --- OPTIONAL: emit metadata (if your Pipeline has a Boxes channel) ---
+			if pl.Boxes != nil && (loaded && len(rects) > 0) {
+				boxes := make([]Box, 0, len(rects))
+				for _, r := range rects {
+					boxes = append(boxes, Box{X: r.Min.X, Y: r.Min.Y, W: r.Dx(), H: r.Dy()})
+				}
+				select {
+				case pl.Boxes <- BoxesEvent{
+					PubID:    cfg.PubID,
+					TrackID:  cfg.TrackID,
+					W:        pl.W,
+					H:        pl.H,
+					TsUnixMs: time.Now().UnixMilli(),
+					Boxes:    boxes,
+				}:
+				default:
+					// drop if the channel is full to avoid blocking the media thread
+				}
+			}
+
+			// --- Ensure encoder still gets 3-channel BGR ---
 			if _, err := pl.EncIn.Write(mat.ToBytes()); err != nil {
 				log.Printf("[CV] enc stdin write failed: %v", err)
 				mat.Close()
@@ -306,7 +401,7 @@ func StartH264(ctx context.Context, cfg Config) (*Pipeline, error) {
 			pl.broadcast(&pkt)
 			count++
 			if time.Since(last) > 2*time.Second {
-				log.Printf("[CV] enc→RTP packets in last 2s: %d", count)
+				// log.Printf("[CV] enc→RTP packets in last 2s: %d", count)
 				count = 0
 				last = time.Now()
 			}

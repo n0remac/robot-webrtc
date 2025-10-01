@@ -14,7 +14,7 @@ import (
 	"time"
 
 	"github.com/gorilla/websocket"
-	cvproc "github.com/n0remac/robot-webrtc/cvpipe"
+	cvpipe "github.com/n0remac/robot-webrtc/cvpipe"
 	wsock "github.com/n0remac/robot-webrtc/websocket"
 	"github.com/pion/interceptor" // <-- Add this import
 	"github.com/pion/rtcp"
@@ -81,7 +81,7 @@ type sfuPeer struct {
 
 	procMu    sync.Mutex
 	procUDP   map[string]*net.UDPConn // key pubID|trackID → UDP socket to pipeline input
-	procPipes map[string]*cvproc.Pipeline
+	procPipes map[string]*cvpipe.Pipeline
 
 	makingOffer atomic.Bool
 	polite      bool
@@ -279,7 +279,7 @@ func SfuWebsocketHandler(w http.ResponseWriter, r *http.Request) {
 		negCh:        make(chan struct{}, 1),
 		closed:       make(chan struct{}),
 		procUDP:      make(map[string]*net.UDPConn),
-		procPipes:    make(map[string]*cvproc.Pipeline),
+		procPipes:    make(map[string]*cvpipe.Pipeline),
 		polite:       false,
 		procFanouts:  make(map[string]map[string]<-chan *rtp.Packet),
 		keyframeGate: make(map[string]*keyGate),
@@ -290,14 +290,13 @@ func SfuWebsocketHandler(w http.ResponseWriter, r *http.Request) {
 	rm := sfu.getRoom(room)
 	rm.addPeer(p)
 
-	// If there are existing publishers in the room, attach their tracks to this new peer
-	attachExistingPublishersTo(rm, p)
-
 	// Wire Pion events
 	wirePeerEvents(p, rm)
 
 	// Start writer (single goroutine) before we may send anything
 	go writePumpSFU(p)
+
+	rm.attachRawFanoutToSubscriber(p)
 
 	// Start reader (messages → signaling)
 	readPumpSFU(p, rm)
@@ -395,139 +394,71 @@ func wirePeerEvents(p *sfuPeer, rm *sfuRoom) {
 		others := rm.others(p.id)
 		for _, sub := range others {
 			codec := remote.Codec().RTPCodecCapability
-			if kind == webrtc.RTPCodecTypeVideo {
-				// SKIP raw video: no AddTrack here
-				continue
-			}
 
-			// Audio stays raw
-			out, err := webrtc.NewTrackLocalStaticRTP(codec, trackID, pubID)
-			if err != nil {
-				continue
-			}
-			sender, err := sub.pc.AddTrack(out)
-			if err != nil {
-				continue
-			}
+			if kind == webrtc.RTPCodecTypeVideo || kind == webrtc.RTPCodecTypeAudio {
+				out, err := webrtc.NewTrackLocalStaticRTP(codec, trackID, pubID)
+				if err != nil {
+					continue
+				}
+				sender, err := sub.pc.AddTrack(out)
+				if err != nil {
+					continue
+				}
 
-			key := senderKey(pubID, trackID)
-			sub.sendersMu.Lock()
-			sub.senders[key] = sender
-			sub.localAudio[key] = out
-			sub.sendersMu.Unlock()
+				key := senderKey(pubID, trackID)
+				sub.sendersMu.Lock()
+				sub.senders[key] = sender
+				if kind == webrtc.RTPCodecTypeVideo {
+					sub.localVideo[key] = out
+				} else {
+					sub.localAudio[key] = out
+				}
+				sub.sendersMu.Unlock()
 
-			go relayRTCPToPublisher(sender, remote, p.pc)
-			requestNegotiation(sub)
+				go relayRTCPToPublisher(sender, remote, p.pc)
+				requestNegotiation(sub)
+			}
 		}
 
-		// ---------- spin up a CV pipeline and a server-published processed track ----------
+		// ---------- spin up CV pipeline (metadata only; NO processed track) ----------
 		if kind == webrtc.RTPCodecTypeVideo {
-			// ---- start CV pipeline for this publisher video track ----
-			key := senderKey(pubID, trackID) // pubID|trackID
-			outPort := 7000 + rand.Intn(1000)
+			key := senderKey(pubID, trackID)
 			inPort := 8000 + rand.Intn(1000) // RTP IN for decoder
 
-			cfg := cvproc.Config{
-				Key:         key,
-				CodecCap:    remote.Codec().RTPCodecCapability,
-				W:           1280,
-				H:           720,
-				FPS:         30,
-				OutTrackID:  trackID + "-proc",
-				OutStreamID: pubID,
-				InRTPPort:   inPort,
-				InPT:        uint8(remote.Codec().PayloadType), // publisher's H264 PT
-				OutRTPPort:  outPort,
+			cfg := cvpipe.Config{
+				Key:       key,
+				CodecCap:  remote.Codec().RTPCodecCapability,
+				W:         1280,
+				H:         720,
+				FPS:       30,
+				InRTPPort: inPort,
+				InPT:      uint8(remote.Codec().PayloadType),
+
+				// Optional: you can keep OutRTPPort/encoder for diagnostics; safe to remove if unused.
+				// OutRTPPort: 7000 + rand.Intn(1000),
 				H264Bitrate: "2500k",
+
+				PubID:   pubID,
+				TrackID: trackID,
 			}
 
-			log.Printf("[CV] start cfg pub=%s track=%s inPT=%d inPort=%d outPort=%d size=%dx%d fps=%d",
-				pubID, trackID, cfg.InPT, cfg.InRTPPort, cfg.OutRTPPort, cfg.W, cfg.H, cfg.FPS)
+			log.Printf("[CV] start cfg pub=%s track=%s inPT=%d inPort=%d size=%dx%d fps=%d",
+				pubID, trackID, cfg.InPT, cfg.InRTPPort, cfg.W, cfg.H, cfg.FPS)
 
-			pl, err := cvproc.StartH264(context.Background(), cfg)
+			pl, err := cvpipe.StartH264(context.Background(), cfg)
 			if err != nil {
 				log.Printf("[CV] start failed for %s: %v", key, err)
 			} else {
+				// Nudge keyframes just to get the decoder rolling quickly
 				ssrc := remote.SSRC()
 				go burstKeyframes(p.pc, uint32(ssrc), 3, 200*time.Millisecond)
-
-				go func(ssrc uint32, ready <-chan struct{}) {
-					ticker := time.NewTicker(2 * time.Second)
-					defer ticker.Stop()
-					timeout := time.NewTimer(3 * time.Second)
-					defer timeout.Stop()
-
-					for {
-						select {
-						case <-ready:
-							// decoder has output real frames; stop nudging
-							return
-						case <-ticker.C:
-							requestKeyframe(p.pc, ssrc, 77) // any seq; value not important beyond monotonicity per peer
-						case <-timeout.C:
-							return
-						}
-					}
-				}(uint32(ssrc), pl.FirstRawFrame)
-
-				others := rm.others(p.id)
-				for _, sub := range others {
-					cap := webrtc.RTPCodecCapability{
-						MimeType:    webrtc.MimeTypeH264,
-						ClockRate:   90000,
-						SDPFmtpLine: "level-asymmetry-allowed=1;packetization-mode=1;profile-level-id=42e01f",
-						RTCPFeedback: []webrtc.RTCPFeedback{
-							{Type: "nack"}, {Type: "nack", Parameter: "pli"},
-							{Type: "goog-remb"}, {Type: "transport-cc"},
-						},
-					}
-
-					outTrack, err := webrtc.NewTrackLocalStaticRTP(cap, cfg.OutTrackID, pubID)
-					if err != nil {
-						log.Printf("[CV] new track (sub=%s) failed: %v", sub.id, err)
-						continue
-					}
-					snd, err := sub.pc.AddTrack(outTrack)
-					if err != nil {
-						log.Printf("[CV] AddTrack (sub=%s) failed: %v", sub.id, err)
-						continue
-					}
-					log.Printf("[CV] sub attach proc pub=%s → sub=%s outTrack=%s",
-						pubID, sub.id, cfg.OutTrackID)
-
-					// THIS sender's negotiated PT for H.264
-					params := snd.GetParameters()
-					subPT := uint8(96)
-					if len(params.Codecs) > 0 {
-						subPT = uint8(params.Codecs[0].PayloadType)
-					}
-					log.Printf("[CV] sub=%s negotiated PT=%d", sub.id, subPT)
-
-					// Book-keeping
-					k2 := senderKey(pubID, cfg.OutTrackID)
-					sub.sendersMu.Lock()
-					sub.senders[k2] = snd
-					sub.localVideo[k2] = outTrack
-					sub.sendersMu.Unlock()
-
-					// Optional: RTCP reader for PLIs/FIRs (diagnostics for now)
-					go handleProcessedRTCP(snd)
-
-					// ---- NEW: wait briefly for the sender to be ready ----
-					rw, _ := makeRewriterForSender(snd, subPT)
-					ready := waitSenderReady(snd, 2*time.Second) // you already have this
-					subCh := pl.Subscribe()
-					go forwardProcessedRTP(sub, k2, outTrack, subCh, rw, ready)
-
-					log.Printf("[CV] attached processed track %s for pub=%s to sub=%s (PT=%d)",
-						cfg.OutTrackID, pubID, sub.id, subPT)
-
-					requestNegotiation(sub)
-				}
 
 				p.procMu.Lock()
 				p.procPipes[key] = pl
 				p.procMu.Unlock()
+
+				// Forward only metadata (face boxes) to clients
+				go forwardBoxesToRoom(rm, p.id, pl.Boxes, pubID, trackID)
 			}
 		}
 
@@ -544,11 +475,10 @@ func wirePeerEvents(p *sfuPeer, rm *sfuRoom) {
 		}
 		p.keyframeMu.Unlock()
 
-		// --------- single-reader fan-out + CV tee ----------
+		// --------- single-reader fan-out + CV tee (no processed AddTrack) ----------
 		go func() {
 			rtpInCount := 0
 			rtpInLast := time.Now()
-			missingSinkWarned := false
 			firstWrite := true
 			waitLogLast := time.Now().Add(-3 * time.Second)
 
@@ -560,6 +490,7 @@ func wirePeerEvents(p *sfuPeer, rm *sfuRoom) {
 
 				subs := rm.others(p.id)
 
+				// ----- RAW AUDIO FAN-OUT -----
 				if kind == webrtc.RTPCodecTypeAudio {
 					for _, sub := range subs {
 						k := senderKey(pubID, trackID)
@@ -570,29 +501,28 @@ func wirePeerEvents(p *sfuPeer, rm *sfuRoom) {
 					continue
 				}
 
-				// video path
+				// ----- RAW VIDEO FAN-OUT -----
+				for _, sub := range subs {
+					k := senderKey(pubID, trackID)
+					if out := sub.localVideo[k]; out != nil {
+						_ = out.WriteRTP(pkt)
+					}
+				}
+
+				// ----- CV DECODER TEE (metadata only) -----
 				p.procMu.Lock()
 				pl := p.procPipes[senderKey(pubID, trackID)]
 				p.procMu.Unlock()
-
 				if pl == nil || pl.InRTPConn == nil {
-					if !missingSinkWarned {
-						log.Printf("[CV] decoder sink not ready yet (pub=%s track=%s); dropping until ready", pubID, trackID)
-						missingSinkWarned = true
-					}
+					// decoder not ready yet; skip feeding it, but keep raw fan-out above
 					continue
 				}
-				if missingSinkWarned {
-					log.Printf("[CV] decoder sink is ready (pub=%s track=%s)", pubID, trackID)
-					missingSinkWarned = false
-				}
 
-				// ---- KEYFRAME GATE (thread-safe per track) ----
+				// KEYFRAME GATE (only for feeding the decoder)
 				p.keyframeMu.Lock()
 				g := p.keyframeGate[gateKey]
 				p.keyframeMu.Unlock()
 				if g == nil {
-					// Shouldn't happen, but be defensive: recreate & keep waiting=true
 					p.keyframeMu.Lock()
 					g = &keyGate{waiting: true, lastPLI: time.Now().Add(-time.Second)}
 					p.keyframeGate[gateKey] = g
@@ -600,30 +530,26 @@ func wirePeerEvents(p *sfuPeer, rm *sfuRoom) {
 				}
 
 				if g.waiting {
-					// gentle log once every ~2s so we don’t spam
 					if time.Since(waitLogLast) > 2*time.Second {
 						log.Printf("[CV] waiting for first keyframe (pub=%s track=%s)", pubID, trackID)
 						waitLogLast = time.Now()
 					}
-					// Nudge the publisher every 300ms while we wait
 					if time.Since(g.lastPLI) > 300*time.Millisecond {
-						_ = requestKeyframePLI(p.pc, uint32(trackSSRC)) // no seq
+						_ = requestKeyframePLI(p.pc, uint32(trackSSRC))
 						p.keyframeMu.Lock()
 						g.lastPLI = time.Now()
 						p.keyframeMu.Unlock()
 					}
-					// Drop everything until we see an IDR start (not a mid-FU)
 					if !isH264KeyframeRTP(pkt.Payload) {
 						continue
 					}
-					// First IDR observed — open the gate
 					p.keyframeMu.Lock()
 					g.waiting = false
 					p.keyframeMu.Unlock()
 					log.Printf("[CV] keyframe detected; starting decode (pub=%s track=%s)", pubID, trackID)
 				}
 
-				// Forward to decoder
+				// Feed decoder
 				b, err := pkt.Marshal()
 				if err != nil {
 					log.Printf("[CV] marshal RTP failed: %v", err)
@@ -640,8 +566,6 @@ func wirePeerEvents(p *sfuPeer, rm *sfuRoom) {
 
 				rtpInCount++
 				if time.Since(rtpInLast) >= time.Second {
-					log.Printf("[CV] →decoder RTP in last 1s: %d (pub=%s track=%s ssrc=%d pt=%d)",
-						rtpInCount, pubID, trackID, pkt.SSRC, pkt.PayloadType)
 					rtpInCount = 0
 					rtpInLast = time.Now()
 				}
@@ -657,7 +581,7 @@ func wirePeerEvents(p *sfuPeer, rm *sfuRoom) {
 			}
 			rm.mu.Unlock()
 
-			// Remove normal fan-out tracks from subscribers
+			// Remove RAW fan-out tracks from subscribers
 			subs := rm.others(p.id)
 			for _, sub := range subs {
 				k := senderKey(pubID, trackID)
@@ -675,7 +599,7 @@ func wirePeerEvents(p *sfuPeer, rm *sfuRoom) {
 				requestNegotiation(sub)
 			}
 
-			// Tear down CV pipeline + remove processed track (video only)
+			// Tear down CV pipeline (video only) — NO processed-track cleanup
 			if kind == webrtc.RTPCodecTypeVideo {
 				key := senderKey(pubID, trackID)
 				p.procMu.Lock()
@@ -684,18 +608,6 @@ func wirePeerEvents(p *sfuPeer, rm *sfuRoom) {
 				p.procMu.Unlock()
 				if pl != nil {
 					pl.Stop()
-				}
-
-				for _, sub := range rm.others(p.id) {
-					k2 := senderKey(pubID, trackID+"-proc")
-					sub.sendersMu.Lock()
-					if snd, ok := sub.senders[k2]; ok {
-						_ = sub.pc.RemoveTrack(snd)
-						delete(sub.senders, k2)
-					}
-					delete(sub.localVideo, k2)
-					sub.sendersMu.Unlock()
-					requestNegotiation(sub)
 				}
 			}
 
@@ -984,89 +896,6 @@ func randomSFUID() string {
 	return fmt.Sprintf("sfu-%d", rand.Intn(100000))
 }
 
-func attachExistingPublishersTo(rm *sfuRoom, sub *sfuPeer) {
-	// for each existing publisher and their tracks…
-	rm.mu.Lock()
-	pubs := make(map[string]map[string]*pubTrack, len(rm.pubs))
-	for pubID, m := range rm.pubs { // shallow copy of pointers; fine while rm.mu is locked
-		pubs[pubID] = m
-	}
-	rm.mu.Unlock()
-
-	for pubID, tracks := range pubs {
-		if pubID == sub.id {
-			continue
-		} // don't loop back to self
-
-		for trackID, pt := range tracks {
-			if pt.kind != webrtc.RTPCodecTypeVideo {
-				// (optional) your audio raw fan-out setup, if you support late joiners for audio too
-				continue
-			}
-
-			key := senderKey(pubID, trackID) // pubID|trackID
-
-			// Grab the publisher’s CV pipeline
-			pubPeer := rm.getPeer(pubID) // whatever helper you have to fetch a peer by id
-			if pubPeer == nil {
-				continue
-			}
-
-			pubPeer.procMu.Lock()
-			pl := pubPeer.procPipes[key]
-			pubPeer.procMu.Unlock()
-			if pl == nil {
-				log.Printf("[CV] no pipeline for pub=%s track=%s; skipping attach to sub=%s", pubID, trackID, sub.id)
-				continue
-			}
-
-			// Create a NEW local H.264 track for THIS subscriber
-			cap := webrtc.RTPCodecCapability{
-				MimeType:    webrtc.MimeTypeH264,
-				ClockRate:   90000,
-				SDPFmtpLine: "level-asymmetry-allowed=1;packetization-mode=1;profile-level-id=42e01f",
-				RTCPFeedback: []webrtc.RTCPFeedback{
-					{Type: "nack"}, {Type: "nack", Parameter: "pli"},
-					{Type: "goog-remb"}, {Type: "transport-cc"},
-				},
-			}
-			outTrack, err := webrtc.NewTrackLocalStaticRTP(cap, trackID+"-proc", pubID)
-			if err != nil {
-				log.Printf("[CV] new track (sub=%s) failed: %v", sub.id, err)
-				continue
-			}
-			snd, err := sub.pc.AddTrack(outTrack)
-			if err != nil {
-				log.Printf("[CV] AddTrack (sub=%s) failed: %v", sub.id, err)
-				continue
-			}
-
-			params := snd.GetParameters()
-			subPT := uint8(96)
-			if len(params.Codecs) > 0 {
-				subPT = uint8(params.Codecs[0].PayloadType)
-			}
-
-			k2 := senderKey(pubID, trackID+"-proc")
-			sub.sendersMu.Lock()
-			sub.senders[k2] = snd
-			sub.localVideo[k2] = outTrack
-			sub.sendersMu.Unlock()
-
-			go handleProcessedRTCP(snd)
-			rw, _ := makeRewriterForSender(snd, subPT)
-			ready := waitSenderReady(snd, 2*time.Second) // you already have this
-			subCh := pl.Subscribe()
-			go forwardProcessedRTP(sub, k2, outTrack, subCh, rw, ready)
-
-			log.Printf("[CV] re-attached processed track %s for pub=%s to sub=%s (PT=%d)",
-				trackID+"-proc", pubID, sub.id, subPT)
-
-			requestNegotiation(sub)
-		}
-	}
-}
-
 func (r *sfuRoom) broadcastExcept(senderID string, msg interface{}) {
 	r.mu.Lock()
 	subs := make([]*sfuPeer, 0, len(r.peers))
@@ -1092,7 +921,7 @@ func handleProcessedRTCP(snd *webrtc.RTPSender) {
 		for _, p := range pkts {
 			switch p.(type) {
 			case *rtcp.PictureLossIndication, *rtcp.FullIntraRequest:
-				log.Printf("[CV] PLI/FIR for processed track → request encoder keyframe")
+				// log.Printf("[CV] PLI/FIR for processed track → request encoder keyframe")
 				// TODO: trigger keyframe (see note above)
 			}
 		}
@@ -1135,7 +964,7 @@ func forwardProcessedRTP(sub *sfuPeer, key string, out *webrtc.TrackLocalStaticR
 			}
 			count++
 		case <-tick.C:
-			log.Printf("[CV] forwarded %d RTP pkts to sub=%s track=%s", count, sub.id, key)
+			// log.Printf("[CV] forwarded %d RTP pkts to sub=%s track=%s", count, sub.id, key)
 			count = 0
 		}
 	}
@@ -1236,4 +1065,76 @@ func (rw *rtpRewrite) mapPacket(p *rtp.Packet) *rtp.Packet {
 	cp.SequenceNumber = rw.outSeq + dseq
 	cp.Timestamp = rw.outTS + dts
 	return &cp
+}
+
+func forwardBoxesToRoom(rm *sfuRoom, pubPeerID string, ch <-chan cvpipe.BoxesEvent, pubID, trackID string) {
+	for ev := range ch {
+		// shape a message your frontend expects
+		msg := map[string]any{
+			"type":    "cv/boxes",
+			"from":    pubID,
+			"trackId": trackID,
+			"w":       ev.W,
+			"h":       ev.H,
+			"ts":      ev.TsUnixMs,
+			"boxes":   ev.Boxes,
+		}
+
+		// Broadcast to others in room
+		others := rm.others(pubPeerID)
+		for _, sub := range others {
+			sendJSON(sub, msg)
+		}
+	}
+}
+
+// add this to your SFU package
+
+func (rm *sfuRoom) attachRawFanoutToSubscriber(sub *sfuPeer) {
+	rm.mu.Lock()
+	defer rm.mu.Unlock()
+
+	for pubID, tracks := range rm.pubs {
+		// Don't mirror their own tracks back
+		if pubID == sub.id {
+			continue
+		}
+		for trackID, pt := range tracks {
+			codec := pt.remote.Codec().RTPCodecCapability
+			key := senderKey(pubID, trackID)
+
+			// Skip if already attached (rejoin / renegotiate safety)
+			sub.sendersMu.Lock()
+			_, already := sub.senders[key]
+			sub.sendersMu.Unlock()
+			if already {
+				continue
+			}
+
+			out, err := webrtc.NewTrackLocalStaticRTP(codec, trackID, pubID)
+			if err != nil {
+				continue
+			}
+			snd, err := sub.pc.AddTrack(out)
+			if err != nil {
+				continue
+			}
+
+			// book-keeping
+			sub.sendersMu.Lock()
+			sub.senders[key] = snd
+			if pt.kind == webrtc.RTPCodecTypeVideo {
+				sub.localVideo[key] = out
+			} else {
+				sub.localAudio[key] = out
+			}
+			sub.sendersMu.Unlock()
+
+			// make sure RTCP from sub reaches the publisher
+			go relayRTCPToPublisher(snd, pt.remote, pt.pubPC)
+
+			// trigger negotiation for the new m-section
+			requestNegotiation(sub)
+		}
+	}
 }

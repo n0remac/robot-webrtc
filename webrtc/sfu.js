@@ -11,6 +11,8 @@ const MAX_CAND_QUEUE = 2048;
 let remoteDescSet = false;
 const remoteTrackMap = {};
 const remoteByStream = new Map();
+const overlays = new Map();
+const latestBoxes = new Map();
 
 window.addEventListener("beforeunload", () => {
     try { if (ws?.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: "leave" })); } catch { }
@@ -149,49 +151,42 @@ async function connectSFUSocket() {
         pc.ontrack = ({ track, streams }) => {
             const stream = streams?.[0] || new MediaStream([track]);
 
-            // Log what just arrived
             console.log(
                 "[ontrack]",
                 "kind:", track.kind,
                 "id:", track.id,
-                "stream.id:", stream.id,
-                "proc:", track.kind === "video" && track.id.endsWith("-proc")
+                "stream.id:", stream.id
             );
 
             if (track.kind === "video") {
-                // Ignore our own stream (if ever mirrored back)
-                if (stream.id === myUUID) {
-                    console.log("[ontrack] ignoring self video stream", stream.id);
-                    return;
+                if (stream.id === myUUID) return;
+
+                const el = Object.assign(document.createElement("video"), {
+                    autoplay: true, playsInline: true, muted: true, srcObject: stream,
+                });
+                el.dataset.ownerId = stream.id;
+                el.addEventListener("loadedmetadata", () => el.play().catch(() => { }));
+
+                const entry = ensureOverlay(track.id, stream.id, el);
+
+                // if metadata arrived before video, render it now
+                const pending = latestBoxes.get(track.id);
+                if (pending) {
+                    entry.detW = pending.w; entry.detH = pending.h;
+                    drawBoxes(entry, pending.w, pending.h, pending.boxes);
+                    latestBoxes.delete(track.id);
                 }
 
-                const el = document.createElement("video");
-                Object.assign(el, {
-                    autoplay: true,
-                    playsInline: true,
-                    muted: true, // ensure autoplay isn’t blocked
-                    srcObject: stream,
-                });
-                el.dataset.ownerId = stream.id; // publisher’s id
-
-                el.addEventListener("loadedmetadata", () => {
-                    el.play().catch(err =>
-                        console.warn("[ontrack] video play() failed:", err)
-                    );
-                });
-
-                document.getElementById("videos").appendChild(el);
-                console.log("[ontrack] attached video element for stream", stream.id);
-            } else if (track.kind === "audio") {
+                console.log("[ontrack] attached video+overlay for stream", stream.id);
+            }
+            else if (track.kind === "audio") {
                 const el = document.createElement("audio");
-                Object.assign(el, {
-                    autoplay: true,
-                    srcObject: stream,
-                });
+                Object.assign(el, { autoplay: true, srcObject: stream });
                 document.body.appendChild(el);
                 console.log("[ontrack] attached audio element for stream", stream.id);
             }
         };
+
 
 
 
@@ -303,6 +298,35 @@ async function connectSFUSocket() {
             }
             return;
         }
+        if (msg.type === "cv/boxes") {
+            const { from, trackId, w, h, boxes } = msg;
+
+            // optional: skip our own metadata
+            if (from === myUUID) return;
+
+            // 1) try to get an existing overlay
+            let entry = overlays.get(trackId);
+
+            // 2) if missing, try to find the video and create the overlay now
+            if (!entry) {
+                const vid = document.querySelector(`video[data-owner-id="${from}"]`);
+                if (vid) {
+                    entry = ensureOverlay(trackId, from, vid);
+                }
+            }
+
+            // 3) if still missing, queue once until ontrack runs
+            if (!entry) {
+                console.warn("[cv/boxes] overlay not ready, queuing", { trackId, from });
+                latestBoxes.set(trackId, { w, h, boxes, from });
+                return;
+            }
+
+            // 4) draw
+            entry.detW = w; entry.detH = h;
+            drawBoxes(entry, w, h, boxes);
+            return;
+        }
     };
 
     ws.onerror = (e) => Logger.error("[SFU] WS error", e);
@@ -340,4 +364,77 @@ async function testMic() {
         s.getTracks().forEach(t => t.stop());
         document.getElementById("mic-status").textContent = "🎤 Mic OK";
     } catch { document.getElementById("mic-status").textContent = "❌ Mic not available"; }
+}
+
+
+function ensureOverlay(trackId, streamId, videoEl) {
+    let entry = overlays.get(trackId);
+    if (entry) return entry;
+
+    // wrapper
+    const wrapper = document.createElement("div");
+    wrapper.className = "remote-wrapper"; // position: relative
+    wrapper.dataset.ownerId = streamId;
+
+    // canvas overlay
+    const canvas = document.createElement("canvas");
+    canvas.id = `ov-${trackId}`;
+    canvas.className = "remote-overlay"; // position:absolute; inset:0; pointer-events:none;
+
+    // move video into wrapper
+    videoEl.classList.add("remote-video"); // width:100%; height:auto (or your layout)
+    wrapper.appendChild(videoEl);
+    wrapper.appendChild(canvas);
+
+    const root = document.getElementById("videos");
+    root.appendChild(wrapper);
+
+    const ctx = canvas.getContext("2d");
+    entry = { video: videoEl, canvas, ctx, detW: 0, detH: 0 };
+    overlays.set(trackId, entry);
+
+    // Keep canvas matched to rendered video size
+    const syncSize = () => {
+        const r = videoEl.getBoundingClientRect();
+        if (!r.width || !r.height) return;
+        // only resize when needed to avoid clearing context every frame
+        if (canvas.width !== (r.width | 0) || canvas.height !== (r.height | 0)) {
+            canvas.width = r.width | 0;
+            canvas.height = r.height | 0;
+        }
+    };
+
+    // On metadata (we know the intrinsic size) and while resizing
+    videoEl.addEventListener("loadedmetadata", syncSize);
+    // Use ResizeObserver for layout changes
+    const ro = new ResizeObserver(syncSize);
+    ro.observe(videoEl);
+    // Store to entry if you want to disconnect later:
+    entry._ro = ro;
+    entry._syncSize = syncSize;
+
+    return entry;
+}
+
+function drawBoxes(entry, detW, detH, boxes) {
+    if (!entry) return;
+    const { video, canvas, ctx } = entry;
+    // ensure canvas tracks current on-screen size
+    entry._syncSize?.();
+
+    const vw = canvas.width, vh = canvas.height;
+    if (!vw || !vh || !detW || !detH) return;
+
+    const sx = vw / detW;
+    const sy = vh / detH;
+
+    // clear and draw
+    ctx.clearRect(0, 0, vw, vh);
+    ctx.lineWidth = 2;
+    ctx.strokeStyle = "rgba(0,255,0,0.95)";
+    ctx.beginPath();
+    for (const b of boxes || []) {
+        const x = b.x * sx, y = b.y * sy, w = b.w * sx, h = b.h * sy;
+        ctx.strokeRect(x, y, w, h);
+    }
 }

@@ -51,3 +51,25 @@ body {
     box-shadow: 0 0 0.5rem rgba(105, 105, 105, 0.5);
     z-index: 10;
   }
+
+  .remote-wrapper {
+  position: relative;        /* establish stacking context */
+  display: inline-block;     /* or block if you prefer full-width tiles */
+}
+
+/* the <video> */
+.remote-video {
+  display: block;            /* remove inline gap */
+  max-width: 100%;
+  height: auto;
+  position: relative;        /* give it a stacking layer below canvas */
+  z-index: 1;
+}
+
+/* the <canvas> overlay */
+.remote-overlay {
+  position: absolute;
+  inset: 0;                  /* top:0; right:0; bottom:0; left:0 */
+  pointer-events: none;      /* clicks pass through */
+  z-index: 2;                /* above the video */
+}
