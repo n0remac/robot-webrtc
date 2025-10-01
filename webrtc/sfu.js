@@ -141,62 +141,60 @@ async function connectSFUSocket() {
             });
         };
 
+        // Assume you know your own id used in the SFU URL (?id=...) as `selfId`
+        const selfId = window.myPeerId; // set this when you connect
+        const remoteTrackMap = {};      // track.id -> { element, kind, ownerId }
+        const remoteByOwner = new Map(); // ownerId -> { videoEl?, audioEls:Set }
+
         pc.ontrack = ({ track, streams }) => {
             const stream = streams?.[0] || new MediaStream([track]);
-            const pubID = stream.id; // set by SFU when it created the local static track
 
-            // create element
-            let el;
+            // Log what just arrived
+            console.log(
+                "[ontrack]",
+                "kind:", track.kind,
+                "id:", track.id,
+                "stream.id:", stream.id,
+                "proc:", track.kind === "video" && track.id.endsWith("-proc")
+            );
+
             if (track.kind === "video") {
-                el = Object.assign(document.createElement("video"), {
-                    id: `remote-video-${track.id}`,
-                    srcObject: stream,
+                // Ignore our own stream (if ever mirrored back)
+                if (stream.id === myUUID) {
+                    console.log("[ontrack] ignoring self video stream", stream.id);
+                    return;
+                }
+
+                const el = document.createElement("video");
+                Object.assign(el, {
                     autoplay: true,
                     playsInline: true,
+                    muted: true, // ensure autoplay isn’t blocked
+                    srcObject: stream,
                 });
-                el.classList.add("remote-video");
+                el.dataset.ownerId = stream.id; // publisher’s id
+
+                el.addEventListener("loadedmetadata", () => {
+                    el.play().catch(err =>
+                        console.warn("[ontrack] video play() failed:", err)
+                    );
+                });
+
                 document.getElementById("videos").appendChild(el);
-            } else {
-                el = Object.assign(document.createElement("audio"), {
+                console.log("[ontrack] attached video element for stream", stream.id);
+            } else if (track.kind === "audio") {
+                const el = document.createElement("audio");
+                Object.assign(el, {
                     autoplay: true,
                     srcObject: stream,
                 });
                 document.body.appendChild(el);
+                console.log("[ontrack] attached audio element for stream", stream.id);
             }
-
-            // index by track & by stream
-            remoteTrackMap[track.id] = { element: el, kind: track.kind, pubID };
-            if (!remoteByStream.has(pubID)) remoteByStream.set(pubID, new Set());
-            remoteByStream.get(pubID).add(el);
-            el.dataset.streamId = pubID;
-
-            const cleanup = () => {
-                // remove the specific element
-                if (remoteTrackMap[track.id]?.element) {
-                    try { remoteTrackMap[track.id].element.srcObject = null; } catch { }
-                    remoteTrackMap[track.id].element.remove();
-                }
-                delete remoteTrackMap[track.id];
-
-                // if the stream has no visible elements left, drop it from map
-                const set = remoteByStream.get(pubID);
-                if (set) {
-                    set.delete(el);
-                    if (set.size === 0) remoteByStream.delete(pubID);
-                }
-            };
-
-            // multiple signals can happen depending on browser
-            track.onended = cleanup;
-            track.onmute = () => {
-                // If a track is permanently removed server-side, browsers often mute then end.
-                // Quick heuristic: if readyState becomes 'ended', cleanup now.
-                if (track.readyState === "ended") cleanup();
-            };
-            stream.addEventListener("removetrack", () => {
-                if (!stream.getTracks().length) cleanup();
-            }, { once: false });
         };
+
+
+
 
         pc.onicecandidate = (e) => {
             if (!pc.localDescription) return;
