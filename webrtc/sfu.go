@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"log"
 	"math/rand"
-	"net"
 	"net/http"
 	"sync"
 	"sync/atomic"
@@ -18,19 +17,8 @@ import (
 	wsock "github.com/n0remac/robot-webrtc/websocket"
 	"github.com/pion/interceptor" // <-- Add this import
 	"github.com/pion/rtcp"
-	"github.com/pion/rtp"
 	"github.com/pion/webrtc/v4"
 )
-
-type rtpRewrite struct {
-	ssrc   uint32 // target SSRC (from the RTCRtpSender)
-	pt     uint8  // negotiated PT for this sender
-	seq0   uint16 // first incoming seq we saw
-	ts0    uint32 // first incoming ts we saw
-	outSeq uint16 // running seq to send
-	outTS  uint32 // running ts base
-	inited bool
-}
 
 /* -------------------------- Types & Wire Messages -------------------------- */
 
@@ -80,18 +68,13 @@ type sfuPeer struct {
 	closed chan struct{}
 
 	procMu    sync.Mutex
-	procUDP   map[string]*net.UDPConn // key pubID|trackID → UDP socket to pipeline input
 	procPipes map[string]*cvpipe.Pipeline
 
 	makingOffer atomic.Bool
 	polite      bool
 
-	procFanoutsMu sync.Mutex
-	procFanouts   map[string]map[string]<-chan *rtp.Packet
-
 	keyframeGate map[string]*keyGate
 	keyframeMu   sync.Mutex
-	pliSeq       atomic.Uint32
 }
 
 type keyGate struct {
@@ -116,13 +99,6 @@ type sfuRoom struct {
 	pubs map[string]map[string]*pubTrack
 }
 
-// getPeer returns the *sfuPeer for the given ID, or nil if not found.
-func (r *sfuRoom) getPeer(id string) *sfuPeer {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	return r.peers[id]
-}
-
 type sfuServer struct {
 	mu    sync.Mutex
 	rooms map[string]*sfuRoom
@@ -138,34 +114,8 @@ var sfu = &sfuServer{
 
 func newSFUAPI() *webrtc.API {
 	m := &webrtc.MediaEngine{}
-
-	// AUDIO (default set is fine, or explicitly add Opus)
-	if err := m.RegisterDefaultCodecs(); err != nil {
-		panic(err)
-	}
-
-	// Remove non-H264 video receive codecs (or re-register only H264)
-	// Easiest: rebuild MediaEngine video section explicitly:
-	mvideo := &webrtc.MediaEngine{}
-	// H264 CBP/packetization-mode=1 is the safest baseline for browsers
-	if err := mvideo.RegisterCodec(webrtc.RTPCodecParameters{
-		RTPCodecCapability: webrtc.RTPCodecCapability{
-			MimeType:     webrtc.MimeTypeH264,
-			ClockRate:    90000,
-			Channels:     0,
-			SDPFmtpLine:  "level-asymmetry-allowed=1;packetization-mode=1;profile-level-id=42e01f",
-			RTCPFeedback: []webrtc.RTCPFeedback{{Type: "nack"}, {Type: "nack", Parameter: "pli"}, {Type: "goog-remb"}},
-		},
-		PayloadType: 96, // PT will still be negotiated per-peer; this is a hint
-	}, webrtc.RTPCodecTypeVideo); err != nil {
-		panic(err)
-	}
-
-	// Merge audio from m and our explicit video H264 into one MediaEngine:
-	// simplest is: start empty; register audio+H264 by hand:
-	m2 := &webrtc.MediaEngine{}
 	// Opus:
-	_ = m2.RegisterCodec(webrtc.RTPCodecParameters{
+	_ = m.RegisterCodec(webrtc.RTPCodecParameters{
 		RTPCodecCapability: webrtc.RTPCodecCapability{
 			MimeType:  webrtc.MimeTypeOpus,
 			ClockRate: 48000, Channels: 2,
@@ -173,7 +123,7 @@ func newSFUAPI() *webrtc.API {
 		PayloadType: 111,
 	}, webrtc.RTPCodecTypeAudio)
 	// H264 (same as above)
-	_ = m2.RegisterCodec(webrtc.RTPCodecParameters{
+	_ = m.RegisterCodec(webrtc.RTPCodecParameters{
 		RTPCodecCapability: webrtc.RTPCodecCapability{
 			MimeType:     webrtc.MimeTypeH264,
 			ClockRate:    90000,
@@ -183,10 +133,10 @@ func newSFUAPI() *webrtc.API {
 		PayloadType: 96,
 	}, webrtc.RTPCodecTypeVideo)
 	ir := &interceptor.Registry{}
-	if err := webrtc.RegisterDefaultInterceptors(m2, ir); err != nil {
+	if err := webrtc.RegisterDefaultInterceptors(m, ir); err != nil {
 		panic(err)
 	}
-	return webrtc.NewAPI(webrtc.WithMediaEngine(m2), webrtc.WithInterceptorRegistry(ir))
+	return webrtc.NewAPI(webrtc.WithMediaEngine(m), webrtc.WithInterceptorRegistry(ir))
 }
 
 // For now, let server do public STUN only; keep symmetric to the client.
@@ -278,10 +228,8 @@ func SfuWebsocketHandler(w http.ResponseWriter, r *http.Request) {
 		localAudio:   make(map[string]*webrtc.TrackLocalStaticRTP),
 		negCh:        make(chan struct{}, 1),
 		closed:       make(chan struct{}),
-		procUDP:      make(map[string]*net.UDPConn),
 		procPipes:    make(map[string]*cvpipe.Pipeline),
 		polite:       false,
-		procFanouts:  make(map[string]map[string]<-chan *rtp.Packet),
 		keyframeGate: make(map[string]*keyGate),
 	}
 
@@ -477,8 +425,6 @@ func wirePeerEvents(p *sfuPeer, rm *sfuRoom) {
 
 		// --------- single-reader fan-out + CV tee (no processed AddTrack) ----------
 		go func() {
-			rtpInCount := 0
-			rtpInLast := time.Now()
 			firstWrite := true
 			waitLogLast := time.Now().Add(-3 * time.Second)
 
@@ -562,12 +508,6 @@ func wirePeerEvents(p *sfuPeer, rm *sfuRoom) {
 				if firstWrite {
 					log.Printf("[CV] first RTP → decoder delivered (pub=%s track=%s)", pubID, trackID)
 					firstWrite = false
-				}
-
-				rtpInCount++
-				if time.Since(rtpInLast) >= time.Second {
-					rtpInCount = 0
-					rtpInLast = time.Now()
 				}
 			}
 
@@ -910,66 +850,6 @@ func (r *sfuRoom) broadcastExcept(senderID string, msg interface{}) {
 	}
 }
 
-func handleProcessedRTCP(snd *webrtc.RTPSender) {
-	rtcpBuf := make([]byte, 1500)
-	for {
-		n, _, err := snd.Read(rtcpBuf)
-		if err != nil {
-			return
-		}
-		pkts, _ := rtcp.Unmarshal(rtcpBuf[:n])
-		for _, p := range pkts {
-			switch p.(type) {
-			case *rtcp.PictureLossIndication, *rtcp.FullIntraRequest:
-				// log.Printf("[CV] PLI/FIR for processed track → request encoder keyframe")
-				// TODO: trigger keyframe (see note above)
-			}
-		}
-	}
-}
-
-func waitSenderReady(snd *webrtc.RTPSender, timeout time.Duration) <-chan struct{} {
-	ch := make(chan struct{})
-	go func() {
-		defer close(ch)
-		// crude but effective readiness check
-		deadline := time.Now().Add(timeout)
-		for time.Now().Before(deadline) {
-			if snd != nil && snd.Transport() != nil {
-				return
-			}
-			time.Sleep(10 * time.Millisecond)
-		}
-	}()
-	return ch
-}
-
-func forwardProcessedRTP(sub *sfuPeer, key string, out *webrtc.TrackLocalStaticRTP,
-	ch <-chan *rtp.Packet, rw *rtpRewrite, ready <-chan struct{}) {
-
-	<-ready
-	tick := time.NewTicker(2 * time.Second)
-	defer tick.Stop()
-
-	count := 0
-	for {
-		select {
-		case pkt, ok := <-ch:
-			if !ok {
-				return
-			}
-			mapped := rw.mapPacket(pkt)
-			if err := out.WriteRTP(mapped); err != nil {
-				return
-			}
-			count++
-		case <-tick.C:
-			// log.Printf("[CV] forwarded %d RTP pkts to sub=%s track=%s", count, sub.id, key)
-			count = 0
-		}
-	}
-}
-
 // --- Keyframe helpers ---
 func requestKeyframe(pc *webrtc.PeerConnection, ssrc uint32, seq uint8) {
 	_ = pc.WriteRTCP([]rtcp.Packet{
@@ -1026,45 +906,10 @@ func isH264KeyframeRTP(payload []byte) bool {
 	}
 }
 
-// Simple, safe PLI
 func requestKeyframePLI(pc *webrtc.PeerConnection, ssrc uint32) error {
 	return pc.WriteRTCP([]rtcp.Packet{
 		&rtcp.PictureLossIndication{MediaSSRC: ssrc},
 	})
-}
-
-func makeRewriterForSender(snd *webrtc.RTPSender, pt uint8) (*rtpRewrite, error) {
-	params := snd.GetParameters()
-	var ssrc uint32
-	if len(params.Encodings) > 0 && params.Encodings[0].SSRC != 0 {
-		ssrc = uint32(params.Encodings[0].SSRC)
-	} else {
-		// Fallback: Pion will assign one; if not visible yet, waitSenderReady() and then refresh
-		ssrc = 0 // we’ll update on first write if needed
-	}
-	return &rtpRewrite{ssrc: ssrc, pt: pt}, nil
-}
-
-func (rw *rtpRewrite) mapPacket(p *rtp.Packet) *rtp.Packet {
-	cp := *p
-	if !rw.inited {
-		rw.seq0 = p.SequenceNumber
-		rw.ts0 = p.Timestamp
-		rw.outSeq = 1
-		rw.outTS = p.Timestamp // or any base; we’ll send delta-preserved
-		if rw.ssrc == 0 {
-			rw.ssrc = p.SSRC
-		} // last-ditch if sender SSRC unknown
-		rw.inited = true
-	}
-	dseq := uint16(p.SequenceNumber - rw.seq0)
-	dts := uint32(p.Timestamp - rw.ts0)
-
-	cp.PayloadType = rw.pt
-	cp.SSRC = rw.ssrc
-	cp.SequenceNumber = rw.outSeq + dseq
-	cp.Timestamp = rw.outTS + dts
-	return &cp
 }
 
 func forwardBoxesToRoom(rm *sfuRoom, pubPeerID string, ch <-chan cvpipe.BoxesEvent, pubID, trackID string) {
