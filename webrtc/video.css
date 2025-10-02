@@ -50,6 +50,7 @@ body {
     height: auto;
     box-shadow: 0 0 0.5rem rgba(105, 105, 105, 0.5);
     z-index: 10;
+    transform: scaleX(-1);
   }
 
   .remote-wrapper {
@@ -64,6 +65,7 @@ body {
   height: auto;
   position: relative;        /* give it a stacking layer below canvas */
   z-index: 1;
+  transform: scaleX(-1);
 }
 
 /* the <canvas> overlay */
@@ -72,4 +74,46 @@ body {
   inset: 0;                  /* top:0; right:0; bottom:0; left:0 */
   pointer-events: none;      /* clicks pass through */
   z-index: 2;                /* above the video */
+}
+
+.cv-cursor {
+  position: fixed;
+  left: 0;
+  top: 0;
+  width: 60px;         /* initial, JS will scale */
+  height: 60px;
+  border-radius: 50%;
+  border: 3px solid rgba(255,80,80,0.95); /* fist color */
+  background: rgba(255,80,80,0.12);
+  pointer-events: none;
+  z-index: 999999;     /* above everything */
+  transform: translate(-9999px, -9999px); /* offscreen until first update */
+  transition: none;    /* we’ll animate via rAF */
+  box-shadow: 0 0 10px rgba(255,80,80,0.5);
+}
+
+/* Top bar the cursor can grab */
+#top-draggable {
+  position: fixed;
+  top: 0;
+  left: 240px;                    /* initial position */
+  height: 560px;
+  min-width: 240px;
+  padding: 0 16px;
+  display: flex;
+  align-items: center;
+  background: rgba(20,20,20,0.9);
+  color: white;
+  border-bottom: 2px solid rgba(255,255,255,0.2);
+  border-radius: 0 0 10px 10px;
+  box-shadow: 0 6px 16px rgba(0,0,0,0.25);
+  user-select: none;
+  z-index: 1000000;
+  pointer-events: none;          /* ensure your hand cursor never “hits” it with the mouse */
+}
+
+/* Visual feedback when anchored */
+#top-draggable.anchored {
+  outline: 3px solid rgba(255,80,80,0.85);
+  outline-offset: -3px;
 }

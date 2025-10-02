@@ -179,6 +179,7 @@ func VideoPage(w http.ResponseWriter, r *http.Request) {
 					}),
 					T("SFU (Multiplexed)"),
 				),
+				Div(Id("top-draggable"), T("Drag me with your hand ✋")),
 				// mode selection helper JS
 				Raw(`<script>
 						function updateMode(mode) {

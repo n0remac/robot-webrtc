@@ -375,16 +375,11 @@ func wirePeerEvents(p *sfuPeer, rm *sfuRoom) {
 
 			cfg := cvpipe.Config{
 				Key:       key,
-				CodecCap:  remote.Codec().RTPCodecCapability,
 				W:         1280,
 				H:         720,
 				FPS:       30,
 				InRTPPort: inPort,
 				InPT:      uint8(remote.Codec().PayloadType),
-
-				// Optional: you can keep OutRTPPort/encoder for diagnostics; safe to remove if unused.
-				// OutRTPPort: 7000 + rand.Intn(1000),
-				H264Bitrate: "2500k",
 
 				PubID:   pubID,
 				TrackID: trackID,

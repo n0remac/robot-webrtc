@@ -13,6 +13,7 @@ const remoteTrackMap = {};
 const remoteByStream = new Map();
 const overlays = new Map();
 const latestBoxes = new Map();
+const cursors = new Map();
 
 window.addEventListener("beforeunload", () => {
     try { if (ws?.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: "leave" })); } catch { }
@@ -299,32 +300,43 @@ async function connectSFUSocket() {
             return;
         }
         if (msg.type === "cv/boxes") {
-            const { from, trackId, w, h, boxes } = msg;
-
-            // optional: skip our own metadata
+            const { from, trackId, w: detW, h: detH, boxes } = msg;
             if (from === myUUID) return;
 
-            // 1) try to get an existing overlay
-            let entry = overlays.get(trackId);
+            const fistBoxes = (boxes || []).filter(b => (b.type || "").toLowerCase() === "fist");
+            const candidates = fistBoxes.length ? fistBoxes : (boxes || []);
+            if (!candidates.length || !detW || !detH) return;
 
-            // 2) if missing, try to find the video and create the overlay now
-            if (!entry) {
-                const vid = document.querySelector(`video[data-owner-id="${from}"]`);
-                if (vid) {
-                    entry = ensureOverlay(trackId, from, vid);
-                }
+            let best = candidates[0], bestA = best.w * best.h;
+            for (let i = 1; i < candidates.length; i++) {
+                const a = candidates[i].w * candidates[i].h;
+                if (a > bestA) { best = candidates[i]; bestA = a; }
             }
 
-            // 3) if still missing, queue once until ontrack runs
-            if (!entry) {
-                console.warn("[cv/boxes] overlay not ready, queuing", { trackId, from });
-                latestBoxes.set(trackId, { w, h, boxes, from });
-                return;
-            }
+            // centroid (mirror x if you’re mirroring the video)
+            let cx = best.x + best.w / 2;
+            let cy = best.y + best.h / 2;
+            cx = detW - cx; // mirror
 
-            // 4) draw
-            entry.detW = w; entry.detH = h;
-            drawBoxes(entry, w, h, boxes);
+            const nx = Math.max(0, Math.min(1, cx / detW));
+            const ny = Math.max(0, Math.min(1, cy / detH));
+
+            // --- SIZE: area-based fraction (better than width-only) ---
+            const areaFrac = (best.w * best.h) / (detW * detH);              // 0..1
+            const relSize = Math.sqrt(Math.max(1e-6, Math.min(1, areaFrac))); // 0..1
+
+            updateCursor(from, nx, ny, relSize);
+
+            // Convert to viewport px for hit-testing/dragging
+            const vw = window.innerWidth, vh = window.innerHeight;
+            const vx = nx * vw;
+            const vy = ny * vh;
+
+
+            // Use the SAME relSizeRaw you passed to updateCursor (area-based recommended)
+            handleDepthClickAndDrag(from, vx, vy, relSize);
+
+
             return;
         }
     };
@@ -418,8 +430,7 @@ function ensureOverlay(trackId, streamId, videoEl) {
 
 function drawBoxes(entry, detW, detH, boxes) {
     if (!entry) return;
-    const { video, canvas, ctx } = entry;
-    // ensure canvas tracks current on-screen size
+    const { canvas, ctx } = entry;
     entry._syncSize?.();
 
     const vw = canvas.width, vh = canvas.height;
@@ -428,13 +439,158 @@ function drawBoxes(entry, detW, detH, boxes) {
     const sx = vw / detW;
     const sy = vh / detH;
 
-    // clear and draw
     ctx.clearRect(0, 0, vw, vh);
     ctx.lineWidth = 2;
-    ctx.strokeStyle = "rgba(0,255,0,0.95)";
-    ctx.beginPath();
+
     for (const b of boxes || []) {
+        // choose color by type
+        if (b.type === "palm") {
+            ctx.strokeStyle = "rgba(0,200,255,0.95)";   // cyan for palm
+        } else if (b.type === "fist") {
+            ctx.strokeStyle = "rgba(255,80,80,0.95)";   // red for fist
+        } else {
+            ctx.strokeStyle = "rgba(0,255,0,0.95)";     // fallback
+        }
+
         const x = b.x * sx, y = b.y * sy, w = b.w * sx, h = b.h * sy;
         ctx.strokeRect(x, y, w, h);
+    }
+}
+function ema(prev, next, alpha = 0.35) {
+    if (prev == null || Number.isNaN(prev)) return next;
+    return prev + alpha * (next - prev);
+}
+
+function ensureCursor(pubID) {
+    let c = cursors.get(pubID);
+    if (c) return c;
+    const el = document.createElement('div');
+    el.className = 'cv-cursor';
+    document.body.appendChild(el);
+    c = {
+        el, x: null, y: null, r: null,
+        baseSize: null,
+        isNear: false,          // depth state
+        anchoredEl: null,       // element we’re dragging (or null)
+        anchorOffsetX: 0,
+        anchorOffsetY: 0,
+        lastClickTs: 0
+    };
+    cursors.set(pubID, c);
+    return c;
+}
+
+function getTopBar() {
+    return document.getElementById('top-draggable');
+}
+
+function isCursorOverEl(el, x, y) {
+    if (!el) return false;
+    const r = el.getBoundingClientRect();
+    return x >= r.left && x <= r.right && y >= r.top && y <= r.bottom;
+}
+
+function updateCursor(pubID, nx, ny, relSizeRaw) {
+    const c = ensureCursor(pubID);
+    const vw = window.innerWidth, vh = window.innerHeight;
+
+    // position targets
+    const targetX = nx * vw;
+    const targetY = ny * vh;
+
+    // --- Auto-calibration of "neutral" fist size ---
+    // Slowly adapt to the user's typical size over time.
+    const BASELINE_ALPHA = 0.05;
+    c.baseSize = ema(c.baseSize, relSizeRaw, (c.baseSize == null) ? 1.0 : BASELINE_ALPHA);
+
+    // Current depth relative to baseline ( >1 when closer, <1 when farther )
+    let depth = relSizeRaw / Math.max(1e-6, c.baseSize);
+
+    // Soften extremes (optional)
+    depth = Math.sqrt(depth);
+
+    // INVERT: closer (larger depth) -> smaller circle
+    let inv = 1 / Math.max(0.000001, depth);
+
+    // Clamp the inverted factor so it stays reasonable
+    const INV_MIN = 0.55;                       // don't shrink too much up close
+    const INV_MAX = 1.8;                        // don't grow too huge when far
+    inv = Math.max(INV_MIN, Math.min(INV_MAX, inv));
+
+    // Radius mapping (same base as before)
+    const BASE_RADIUS = Math.min(vw, vh) * 0.05;
+    const CLAMP_MIN = 16;
+    const CLAMP_MAX = Math.min(vw, vh) * 0.14;
+
+    let targetR = BASE_RADIUS * inv;
+    targetR = Math.max(CLAMP_MIN, Math.min(CLAMP_MAX, targetR));
+
+    // Smooth (you can keep radius a bit “heavier” to reduce pulsing)
+    c.x = ema(c.x, targetX, 0.35);
+    c.y = ema(c.y, targetY, 0.35);
+    c.r = ema(c.r, targetR, 0.25);
+
+    // Apply
+    c.el.style.width = `${2 * c.r}px`;
+    c.el.style.height = `${2 * c.r}px`;
+    c.el.style.transform = `translate(${(c.x - c.r) | 0}px, ${(c.y - c.r) | 0}px)`;
+}
+
+function handleDepthClickAndDrag(pubID, viewportX, viewportY, relSizeRaw) {
+    const c = ensureCursor(pubID);
+    const vw = window.innerWidth;
+    const vh = window.innerHeight;
+
+    // --- Baseline of hand size (slow EMA) ---
+    const BASELINE_ALPHA = 0.05;
+    c.baseSize = ema(c.baseSize, relSizeRaw, (c.baseSize == null) ? 1.0 : BASELINE_ALPHA);
+
+    // Depth factor: >1 means closer than baseline, <1 farther
+    let depth = relSizeRaw / Math.max(1e-6, c.baseSize);
+
+    // Hysteresis thresholds to stabilize click gesture
+    const NEAR_T = 1.25;  // enter near when depth rises above this
+    const FAR_T = 1.10;  // leave near when depth drops below this
+
+    let wasNear = c.isNear;
+    if (!wasNear && depth >= NEAR_T) c.isNear = true;
+    else if (wasNear && depth <= FAR_T) c.isNear = false;
+
+    // Edge: far -> near = CLICK
+    if (!wasNear && c.isNear) {
+        const now = performance.now();
+        if (now - c.lastClickTs > 220) { // debounce ~220ms
+            c.lastClickTs = now;
+
+            const bar = getTopBar();
+
+            // If already anchored, unanchor
+            if (c.anchoredEl) {
+                c.anchoredEl.classList.remove('anchored');
+                c.anchoredEl = null;
+                return;
+            }
+
+            // Otherwise, try to anchor if cursor is over the top bar
+            if (isCursorOverEl(bar, viewportX, viewportY)) {
+                // record offset so movement is relative to grab point
+                const r = bar.getBoundingClientRect();
+                c.anchorOffsetX = viewportX - r.left;
+                c.anchorOffsetY = viewportY - r.top;
+                c.anchoredEl = bar;
+                c.anchoredEl.classList.add('anchored');
+
+
+            }
+        }
+    }
+
+    // If anchored, drag the element (fixed top; we only change left)
+    if (c.anchoredEl) {
+        const r = c.anchoredEl.getBoundingClientRect();
+        const left = Math.max(0, Math.min(vw - r.width, viewportX - c.anchorOffsetX));
+        const top = Math.max(0, Math.min(vh - r.height, viewportY - c.anchorOffsetY));
+        c.anchoredEl.style.left = `${left | 0}px`;
+        c.anchoredEl.style.top = `${top | 0}px`;
     }
 }
