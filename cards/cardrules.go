@@ -181,7 +181,13 @@ func (g *Game) NextPhase() {
 }
 
 func (g *Game) AllTricksPlayed() bool {
-	return len(g.Players[0].Hand) == 0
+	// Check if all players have empty hands
+	for _, p := range g.Players {
+		if len(p.Hand) > 0 {
+			return false
+		}
+	}
+	return true
 }
 
 func (g *Game) IsGameOver() bool {
@@ -196,8 +202,8 @@ func DefaultRankComparer(a, b Card) int {
 func (g *Game) startNewRound() {
 	// 1) Rebuild & shuffle deck
 	deck := getStandardDeck()
-	rand.Seed(time.Now().UnixNano())
-	rand.Shuffle(len(deck), func(i, j int) { deck[i], deck[j] = deck[j], deck[i] })
+	r := rand.New(rand.NewSource(time.Now().UnixNano()))
+	r.Shuffle(len(deck), func(i, j int) { deck[i], deck[j] = deck[j], deck[i] })
 	g.Deck = deck
 
 	// 2) Clear previous trick state
@@ -205,6 +211,12 @@ func (g *Game) startNewRound() {
 
 	// 3) Deal N cards to each player
 	handSize := 5
+	requiredCards := handSize * len(g.Players)
+	if len(g.Deck) < requiredCards {
+		fmt.Printf("⚠️  Not enough cards to deal new round: have %d, need %d\n", len(g.Deck), requiredCards)
+		return
+	}
+
 	for i := range g.Players {
 		// give them the next handSize cards
 		g.Players[i].Hand = make([]Card, handSize)
@@ -212,7 +224,4 @@ func (g *Game) startNewRound() {
 		// remove them from the deck
 		g.Deck = g.Deck[handSize:]
 	}
-
-	// 4) Reset phase to start_round
-	g.Phase = PhaseStartRound
 }

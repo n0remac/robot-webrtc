@@ -83,6 +83,10 @@ func lobbyWebsocket(registry *CommandRegistry) func(http.ResponseWriter, *http.R
 		game.Phase = PhaseStartRound
 		_ = engine.TriggerHook(HookOnStartRound, game, nil)
 
+		// Advance to trick start phase so first card play works
+		game.Phase = PhaseTrickStart
+		engine.TriggerHook(HookOnPhaseEnter, game, nil)
+
 		for _, player := range players {
 			page := gameScreen(game, player.Id)
 
@@ -164,21 +168,29 @@ func lobbyWebsocket(registry *CommandRegistry) func(http.ResponseWriter, *http.R
 					}
 				}
 			}
-			// Enter TrickEnd phase
-			game.Phase = PhaseTrickEnd
-			engine.TriggerHook(HookOnPhaseEnter, game, nil)
 
-			// Clear trick and advance phase
+			// Clear trick
 			game.PlayedCards = nil
-			game.NextPhase()
-			engine.TriggerHook(HookOnPhaseEnter, game, nil)
 
-			// 6) If we've just started a new round, reshuffle & redeal
-			if game.Phase == PhaseStartRound {
-				// reshuffle & deal
+			// Check if round is over (all hands empty)
+			if game.AllTricksPlayed() {
+				// Round is complete - transition through phases
+				game.Phase = PhaseTrickEnd
+				engine.TriggerHook(HookOnPhaseEnter, game, nil)
+
+				game.Phase = PhaseRoundEnd
+				engine.TriggerHook(HookOnPhaseEnter, game, nil)
+
+				// Start new round
+				game.Phase = PhaseStartRound
+				engine.TriggerHook(HookOnPhaseEnter, game, nil)
+
 				game.startNewRound()
 
+				// Advance to trick start
+				game.Phase = PhaseTrickStart
 				engine.TriggerHook(HookOnPhaseEnter, game, nil)
+
 				// broadcast fresh hands and cleared trick area
 				for _, p := range game.Players {
 					WsHub.Broadcast <- WebsocketMessage{
@@ -193,6 +205,13 @@ func lobbyWebsocket(registry *CommandRegistry) func(http.ResponseWriter, *http.R
 					}
 				}
 				return
+			} else {
+				// More tricks to play - just start next trick
+				game.Phase = PhaseTrickEnd
+				engine.TriggerHook(HookOnPhaseEnter, game, nil)
+
+				game.Phase = PhaseTrickStart
+				engine.TriggerHook(HookOnPhaseEnter, game, nil)
 			}
 		}
 
