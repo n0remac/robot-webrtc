@@ -1,0 +1,31 @@
+name: Build robot client
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Build Raspberry Pi client
+        env:
+          ROBOT_SITE_URL: ${{ secrets.ROBOT_SITE_URL }}
+        run: |
+          test -n "$ROBOT_SITE_URL"
+          mkdir -p dist
+          GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build \
+            -ldflags "-X main.defaultSiteURL=$ROBOT_SITE_URL" \
+            -o dist/robot-client ./cmd/client
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: robot-client-linux-arm64
+          path: dist/robot-client

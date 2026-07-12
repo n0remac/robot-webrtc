@@ -7,15 +7,17 @@ import (
 	"flag"
 	"fmt"
 	"log"
-	"net/http"
 	"os"
 	"os/signal"
 	"syscall"
-	"time"
 
 	cl "github.com/n0remac/robot-webrtc/client"
 	sv "github.com/n0remac/robot-webrtc/servo"
 )
+
+// defaultSiteURL is localhost for development. Production builds set it with:
+// -ldflags "-X main.defaultSiteURL=https://example.com"
+var defaultSiteURL = "http://localhost:8081"
 
 func main() {
 	if err := run(); err != nil {
@@ -24,7 +26,8 @@ func main() {
 }
 
 func run() error {
-	addr := flag.String("addr", ":8080", "HTTP control server listen address")
+	siteURL := flag.String("site-url", envOrDefault("ROBOT_SITE_URL", defaultSiteURL), "website URL")
+	robotToken := flag.String("robot-token", os.Getenv("ROBOT_TOKEN"), "website robot authentication token")
 	videoBinary := flag.String("video-binary", "ffmpeg", "FFmpeg executable")
 	videoDevice := flag.String("video-device", "/dev/video0", "camera device")
 	videoResolution := flag.String("video-resolution", "640x480", "camera resolution")
@@ -57,20 +60,12 @@ func run() error {
 	}
 	defer camera.Stop()
 
-	server, err := cl.NewServer(controller, servoClient, camera)
-	if err != nil {
-		return err
-	}
-	httpServer := &http.Server{
-		Addr:              *addr,
-		Handler:           server.Handler(),
-		ReadHeaderTimeout: 5 * time.Second,
-	}
-	httpErrors := make(chan error, 1)
-	go func() { httpErrors <- httpServer.ListenAndServe() }()
+	siteClient := &cl.SiteClient{URL: *siteURL, Token: *robotToken, Controller: controller, Camera: camera}
+	siteErrors := make(chan error, 1)
+	go func() { siteErrors <- siteClient.Run(ctx) }()
 
-	log.Printf("robot controls: http://<robot-ip>%s", *addr)
-	log.Printf("motors, servos, and camera are running in one robot process")
+	log.Printf("robot controls are hosted by %s", *siteURL)
+	log.Printf("motors, servos, camera, and website connection are running in one robot process")
 	signals := make(chan os.Signal, 1)
 	signal.Notify(signals, syscall.SIGINT, syscall.SIGTERM)
 	defer signal.Stop(signals)
@@ -79,9 +74,9 @@ func run() error {
 	select {
 	case sig := <-signals:
 		log.Printf("received %s; stopping robot", sig)
-	case err := <-httpErrors:
-		if !errors.Is(err, http.ErrServerClosed) {
-			runErr = fmt.Errorf("HTTP server: %w", err)
+	case err := <-siteErrors:
+		if err != nil {
+			runErr = fmt.Errorf("website client: %w", err)
 		}
 	case err := <-camera.Done():
 		if err == nil {
@@ -93,10 +88,12 @@ func run() error {
 
 	controller.StopAll()
 	cancel()
-	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 3*time.Second)
-	defer shutdownCancel()
-	if err := httpServer.Shutdown(shutdownCtx); err != nil && runErr == nil {
-		runErr = fmt.Errorf("HTTP shutdown: %w", err)
-	}
 	return runErr
+}
+
+func envOrDefault(name, fallback string) string {
+	if value := os.Getenv(name); value != "" {
+		return value
+	}
+	return fallback
 }

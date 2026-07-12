@@ -74,6 +74,10 @@ func (c *Controller) Handle(data []byte) error {
 	if err := json.Unmarshal(data, &m); err != nil {
 		return fmt.Errorf("decode control message: %w", err)
 	}
+	if m.Type == "stop" {
+		c.StopAll()
+		return nil
+	}
 	if m.Type == "heartbeat" {
 		return nil
 	}

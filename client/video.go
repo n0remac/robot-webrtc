@@ -36,6 +36,14 @@ type CameraProcess struct {
 
 func (p *CameraProcess) Done() <-chan error { return p.done }
 
+// LatestFrame returns a copy of the newest JPEG and its sequence number.
+// Callers can use the sequence number to avoid sending the same frame twice.
+func (p *CameraProcess) LatestFrame() ([]byte, uint64) {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	return append([]byte(nil), p.frame...), p.seq
+}
+
 func (p *CameraProcess) Stop() {
 	p.cancel()
 	select {

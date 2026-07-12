@@ -1,25 +1,22 @@
 # robot-webrtc
 
-Local-network control stack for a Raspberry Pi robot. Despite the historical
-repository name, the robot client now uses plain HTTP, MJPEG, and WebSockets;
-WebRTC is no longer required for normal operation.
+Raspberry Pi robot client for the Orcas Makers website. Despite the historical
+repository name, the robot now uses an outbound WebSocket for controls and
+JPEG camera frames; WebRTC is no longer required for normal operation.
 
 ## Architecture
 
-The browser connects directly to the robot:
+The robot connects outward to the website, so the Pi does not host a public UI:
 
 ```text
-Browser -- HTTP/WebSocket --> cmd/client -- GPIO --> motors
-   |                            |
-   |                            +-- in-process servo service --> PCA9685
-   |
-   +-- GET /stream --> Go MJPEG handler <-- FFmpeg <-- /dev/video0
+Browser <-- HTTP/WebSocket --> OrcasMakers website <-- WebSocket -- cmd/client -- GPIO
+                                      ^                                |
+                                      +------ JPEG camera frames ------+
 ```
 
 `cmd/client` initializes the motors and servos, starts and supervises FFmpeg,
-serves the controller page, accepts press/release commands at `/ws/control`, and
-serves FFmpeg's JPEG frames at `/stream`. A heartbeat timeout and every
-WebSocket disconnect stop all motors and servos.
+then maintains an outbound connection to `/ws/robot` on the website. Every
+website disconnect or controller timeout stops all motors and servos.
 
 ## Robot setup
 
@@ -37,13 +34,16 @@ stops it when the robot process shuts down. FFmpeg must be installed, but it
 does not need to be started separately. The standalone `cmd/servo` command
 remains available for servo-only development and hardware testing.
 
-Then open `http://ROBOT_IP:8080/` from a device on the same network. If mDNS is
-configured on the robot, `http://robot.local:8080/` can be used instead.
+For local development the client connects to `http://localhost:8081`. Override
+that with `ROBOT_SITE_URL` or `-site-url`; set `ROBOT_TOKEN` to the same value
+used by the website. Production ARM builds can inject `ROBOT_SITE_URL` from a
+GitHub secret with `-ldflags "-X main.defaultSiteURL=$ROBOT_SITE_URL"`.
 
 Useful client flags:
 
 ```text
--addr    HTTP listen address (default :8080)
+-site-url          Orcas Makers website (default http://localhost:8081)
+-robot-token       robot authentication token (default ROBOT_TOKEN)
 -video-binary      FFmpeg executable (default ffmpeg)
 -video-device      camera device (default /dev/video0)
 -video-resolution  camera resolution (default 640x480)
