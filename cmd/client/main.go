@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"flag"
+	"fmt"
 	"log"
 	"net/http"
 	"os"
@@ -14,55 +15,91 @@ import (
 
 	cl "github.com/n0remac/robot-webrtc/client"
 	sv "github.com/n0remac/robot-webrtc/servo"
-	"google.golang.org/grpc"
-	"google.golang.org/grpc/credentials/insecure"
 )
 
 func main() {
-	motors := cl.SetupRobot()
+	if err := run(); err != nil {
+		log.Fatal(err)
+	}
+}
 
+func run() error {
 	addr := flag.String("addr", ":8080", "HTTP control server listen address")
-	camera := flag.String("camera", "http://127.0.0.1:8081", "uStreamer base URL")
-	servoTarget := flag.String("servo", "127.0.0.1:50051", "servo gRPC address")
+	videoBinary := flag.String("video-binary", "ustreamer", "uStreamer executable")
+	videoDevice := flag.String("video-device", "/dev/video0", "camera device")
+	videoResolution := flag.String("video-resolution", "640x480", "camera resolution")
+	videoFPS := flag.Int("video-fps", 30, "camera frames per second")
+	videoPort := flag.Int("video-port", 8081, "loopback camera streamer port")
 	flag.Parse()
 
-	conn, err := grpc.NewClient(*servoTarget, grpc.WithTransportCredentials(insecure.NewCredentials()))
+	motors := cl.SetupRobot()
+	servoGroup, closeServos, err := sv.SetupHardware()
 	if err != nil {
-		log.Fatalf("connect to servo service: %v", err)
+		return err
 	}
-	defer conn.Close()
-	servoClient := sv.NewControllerClient(conn)
+	defer closeServos()
+
+	servoService := sv.NewServer(servoGroup, sv.DefaultRanges())
+	servoClient := sv.NewLocalClient(servoService)
+	log.Printf("servo control: in-process PCA9685 service (no gRPC listener required)")
 	controller := cl.NewController(motors, servoClient)
 	defer controller.StopAll()
 
-	server, err := cl.NewServer(controller, servoClient, *camera)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	camera, err := cl.StartCamera(ctx, cl.CameraConfig{
+		Binary:     *videoBinary,
+		Device:     *videoDevice,
+		Resolution: *videoResolution,
+		FPS:        *videoFPS,
+		Port:       *videoPort,
+	})
 	if err != nil {
-		log.Fatal(err)
+		return err
 	}
-	log.Printf("robot controls: http://<robot-ip>%s", *addr)
-	log.Printf("camera source: %s/stream", *camera)
+	defer camera.Stop()
+
+	cameraURL := fmt.Sprintf("http://127.0.0.1:%d", *videoPort)
+	server, err := cl.NewServer(controller, servoClient, cameraURL)
+	if err != nil {
+		return err
+	}
 	httpServer := &http.Server{
 		Addr:              *addr,
 		Handler:           server.Handler(),
 		ReadHeaderTimeout: 5 * time.Second,
 	}
-	errCh := make(chan error, 1)
-	go func() { errCh <- httpServer.ListenAndServe() }()
+	httpErrors := make(chan error, 1)
+	go func() { httpErrors <- httpServer.ListenAndServe() }()
 
+	log.Printf("robot controls: http://<robot-ip>%s", *addr)
+	log.Printf("motors, servos, and camera are running in one robot process")
 	signals := make(chan os.Signal, 1)
 	signal.Notify(signals, syscall.SIGINT, syscall.SIGTERM)
+	defer signal.Stop(signals)
+
+	var runErr error
 	select {
 	case sig := <-signals:
 		log.Printf("received %s; stopping robot", sig)
-		controller.StopAll()
-		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-		defer cancel()
-		if err := httpServer.Shutdown(ctx); err != nil {
-			log.Printf("HTTP shutdown: %v", err)
-		}
-	case err := <-errCh:
+	case err := <-httpErrors:
 		if !errors.Is(err, http.ErrServerClosed) {
-			log.Printf("HTTP server: %v", err)
+			runErr = fmt.Errorf("HTTP server: %w", err)
+		}
+	case err := <-camera.Done():
+		if err == nil {
+			runErr = errors.New("camera streamer stopped unexpectedly")
+		} else {
+			runErr = fmt.Errorf("camera streamer stopped: %w", err)
 		}
 	}
+
+	controller.StopAll()
+	cancel()
+	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer shutdownCancel()
+	if err := httpServer.Shutdown(shutdownCtx); err != nil && runErr == nil {
+		runErr = fmt.Errorf("HTTP shutdown: %w", err)
+	}
+	return runErr
 }
