@@ -47,14 +47,13 @@ func TestControllerIgnoresRepeatedKeydown(t *testing.T) {
 }
 
 func TestControlSocketStopsRobotAfterHeartbeatTimeout(t *testing.T) {
-	camera := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	camera := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_, _ = io.WriteString(w, "frame")
-	}))
-	defer camera.Close()
+	})
 
 	motors := []*fakeMotor{{}, {}, {}, {}}
 	c := NewController(motorInterfaces(motors), nil)
-	s, err := NewServer(c, nil, camera.URL)
+	s, err := NewServer(c, nil, camera)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -79,17 +78,16 @@ func TestControlSocketStopsRobotAfterHeartbeatTimeout(t *testing.T) {
 	}
 }
 
-func TestServerServesPageAndProxiesCamera(t *testing.T) {
-	camera := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+func TestServerServesPageAndCamera(t *testing.T) {
+	camera := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/stream" {
 			t.Errorf("camera path = %q, want /stream", r.URL.Path)
 		}
 		_, _ = io.WriteString(w, "camera-data")
-	}))
-	defer camera.Close()
+	})
 
 	motors := []*fakeMotor{{}, {}, {}, {}}
-	s, err := NewServer(NewController(motorInterfaces(motors), nil), nil, camera.URL)
+	s, err := NewServer(NewController(motorInterfaces(motors), nil), nil, camera)
 	if err != nil {
 		t.Fatal(err)
 	}

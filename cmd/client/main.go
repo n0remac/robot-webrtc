@@ -25,11 +25,10 @@ func main() {
 
 func run() error {
 	addr := flag.String("addr", ":8080", "HTTP control server listen address")
-	videoBinary := flag.String("video-binary", "ustreamer", "uStreamer executable")
+	videoBinary := flag.String("video-binary", "ffmpeg", "FFmpeg executable")
 	videoDevice := flag.String("video-device", "/dev/video0", "camera device")
 	videoResolution := flag.String("video-resolution", "640x480", "camera resolution")
 	videoFPS := flag.Int("video-fps", 30, "camera frames per second")
-	videoPort := flag.Int("video-port", 8081, "loopback camera streamer port")
 	flag.Parse()
 
 	motors := cl.SetupRobot()
@@ -52,15 +51,13 @@ func run() error {
 		Device:     *videoDevice,
 		Resolution: *videoResolution,
 		FPS:        *videoFPS,
-		Port:       *videoPort,
 	})
 	if err != nil {
 		return err
 	}
 	defer camera.Stop()
 
-	cameraURL := fmt.Sprintf("http://127.0.0.1:%d", *videoPort)
-	server, err := cl.NewServer(controller, servoClient, cameraURL)
+	server, err := cl.NewServer(controller, servoClient, camera)
 	if err != nil {
 		return err
 	}

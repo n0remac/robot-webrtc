@@ -5,8 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
-	"os"
-	"os/exec"
 	"sync"
 	"time"
 
@@ -229,15 +227,5 @@ func (c *Controller) StopAll() {
 		if err != nil {
 			log.Printf("servo %d safety stop: %v", channel, err)
 		}
-	}
-}
-
-func RunFFmpegCLI(args []string) {
-	log.Printf("running ffmpeg %v", args)
-	cmd := exec.Command("ffmpeg", args...)
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-	if err := cmd.Run(); err != nil {
-		log.Fatalf("ffmpeg failed: %v", err)
 	}
 }

@@ -8,7 +8,6 @@ import (
 	"io/fs"
 	"log"
 	"net/http"
-	"net/http/httputil"
 	"net/url"
 	"sync"
 	"time"
@@ -25,22 +24,18 @@ var webAssets embed.FS
 type Server struct {
 	controller  *Controller
 	servoClient pb.ControllerClient
-	cameraURL   *url.URL
+	camera      http.Handler
 	upgrader    websocket.Upgrader
 	controlTTL  time.Duration
 	activeMu    sync.Mutex
 	active      *websocket.Conn
 }
 
-func NewServer(controller *Controller, servoClient pb.ControllerClient, cameraURL string) (*Server, error) {
-	target, err := url.Parse(cameraURL)
-	if err != nil {
-		return nil, fmt.Errorf("parse camera URL: %w", err)
+func NewServer(controller *Controller, servoClient pb.ControllerClient, camera http.Handler) (*Server, error) {
+	if camera == nil {
+		return nil, fmt.Errorf("camera handler is required")
 	}
-	if target.Scheme != "http" && target.Scheme != "https" {
-		return nil, fmt.Errorf("camera URL must use http or https")
-	}
-	s := &Server{controller: controller, servoClient: servoClient, cameraURL: target, controlTTL: controlTimeout}
+	s := &Server{controller: controller, servoClient: servoClient, camera: camera, controlTTL: controlTimeout}
 	s.upgrader.CheckOrigin = sameOrigin
 	return s, nil
 }
@@ -53,12 +48,7 @@ func (s *Server) Handler() http.Handler {
 		writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 	})
 
-	cameraProxy := httputil.NewSingleHostReverseProxy(s.cameraURL)
-	cameraProxy.ErrorHandler = func(w http.ResponseWriter, _ *http.Request, err error) {
-		log.Printf("camera proxy: %v", err)
-		http.Error(w, "camera stream unavailable; is uStreamer running?", http.StatusServiceUnavailable)
-	}
-	mux.Handle("/stream", cameraProxy)
+	mux.Handle("/stream", s.camera)
 
 	static, err := fs.Sub(webAssets, "web")
 	if err != nil {
