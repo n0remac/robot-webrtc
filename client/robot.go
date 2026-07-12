@@ -3,16 +3,15 @@ package client
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"log"
 	"os"
 	"os/exec"
-	"strings"
+	"sync"
 	"time"
 
 	pb "github.com/n0remac/robot-webrtc/servo"
 	"github.com/stianeikeland/go-rpio/v4"
-
-	"github.com/pion/webrtc/v4"
 )
 
 type Motorer interface {
@@ -45,160 +44,195 @@ func SetupRobot() []Motorer {
 	return []Motorer{m1, m2, m3, m4}
 }
 
-func Controls(
-	motors []Motorer,
-	servoClient pb.ControllerClient,
-) func(msg webrtc.DataChannelMessage) {
+// Controller translates browser control messages into motor and servo actions.
+// It also tracks pressed keys so repeated browser keydown events are harmless.
+type Controller struct {
+	motors      []Motorer
+	servoClient pb.ControllerClient
+	mu          sync.Mutex
+	pressed     map[string]bool
+}
+
+type ControlMessage struct {
+	Type   string `json:"type,omitempty"`
+	Key    string `json:"key,omitempty"`
+	Action string `json:"action,omitempty"`
+}
+
+func NewController(motors []Motorer, servoClient pb.ControllerClient) *Controller {
+	return &Controller{
+		motors:      motors,
+		servoClient: servoClient,
+		pressed:     make(map[string]bool),
+	}
+}
+
+// Handle applies one {key, action} JSON message. Heartbeats are accepted as a
+// no-op; the WebSocket server uses them to enforce its dead-man timeout.
+func (c *Controller) Handle(data []byte) error {
 	const speed = 60 // degrees per second
 
-	return func(msg webrtc.DataChannelMessage) {
-		log.Printf("Received message on DataChannel 'keyboard': %s", string(msg.Data))
-		type Msg struct {
-			Key    string
-			Action string
-		}
-		var m Msg
-		if err := json.Unmarshal(msg.Data, &m); err != nil {
-			log.Printf("Error unmarshalling message: %v", err)
+	var m ControlMessage
+	if err := json.Unmarshal(data, &m); err != nil {
+		return fmt.Errorf("decode control message: %w", err)
+	}
+	if m.Type == "heartbeat" {
+		return nil
+	}
+	if m.Action != "pressed" && m.Action != "released" {
+		return fmt.Errorf("invalid action %q", m.Action)
+	}
+	if !validControlKey(m.Key) {
+		return fmt.Errorf("invalid key %q", m.Key)
+	}
+
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	wantPressed := m.Action == "pressed"
+	if c.pressed[m.Key] == wantPressed {
+		return nil
+	}
+	c.pressed[m.Key] = wantPressed
+
+	// motors for numeric keys
+	m1, m2, m3, m4 := c.motors[0], c.motors[1], c.motors[2], c.motors[3]
+
+	// helper to call the servo RPC
+	rpcAct := func(pin, dir int32) {
+		if c.servoClient == nil {
 			return
 		}
-		log.Printf("Action=%s, Key=%q", m.Action, m.Key)
-
-		// motors for numeric keys
-		m1, m2, m3, m4 := motors[0], motors[1], motors[2], motors[3]
-
-		// helper to call the servo RPC
-		rpcAct := func(pin, dir int32) {
-			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
-			defer cancel()
-			if m.Action == "pressed" {
-				_, err := servoClient.Move(ctx, &pb.MoveRequest{
-					Channel:   pin,
-					Direction: dir,
-					Speed:     speed,
-				})
-				if err != nil {
-					log.Printf("Servo Move RPC error: %v", err)
-				}
-			} else {
-				_, err := servoClient.Stop(ctx, &pb.StopRequest{
-					Channel: pin,
-				})
-				if err != nil {
-					log.Printf("Servo Stop RPC error: %v", err)
-				}
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		if m.Action == "pressed" {
+			_, err := c.servoClient.Move(ctx, &pb.MoveRequest{
+				Channel:   pin,
+				Direction: dir,
+				Speed:     speed,
+			})
+			if err != nil {
+				log.Printf("Servo Move RPC error: %v", err)
+			}
+		} else {
+			_, err := c.servoClient.Stop(ctx, &pb.StopRequest{
+				Channel: pin,
+			})
+			if err != nil {
+				log.Printf("Servo Stop RPC error: %v", err)
 			}
 		}
-		// 4 open claw, 5 turn claw , 6 lift claw, 14, pan camera, 15 tilt camera
-		switch m.Key {
-		// Servos:
-		case "y": // claw open
-			rpcAct(4, +1)
-		case "r": // claw close
-			rpcAct(4, -1)
-		case "t": // arm up
-			rpcAct(6, +1)
-		case "g": // arm down
-			rpcAct(6, -1)
-		case "f": // left/right
-			rpcAct(5, +1)
-		case "h":
-			rpcAct(5, -1)
-		case "i": // camera tilt
-			rpcAct(15, +1)
-		case "k":
-			rpcAct(15, -1)
-		case "l": // camera pan
-			rpcAct(14, -1)
-		case "j":
-			rpcAct(14, +1)
+	}
+	// 4 open claw, 5 turn claw, 6 lift claw, 14 pan camera, 15 tilt camera.
+	switch m.Key {
+	// Servos:
+	case "y": // claw open
+		rpcAct(4, +1)
+	case "r": // claw close
+		rpcAct(4, -1)
+	case "t": // arm up
+		rpcAct(6, +1)
+	case "g": // arm down
+		rpcAct(6, -1)
+	case "f": // left/right
+		rpcAct(5, +1)
+	case "h":
+		rpcAct(5, -1)
+	case "i": // camera tilt
+		rpcAct(15, +1)
+	case "k":
+		rpcAct(15, -1)
+	case "l": // camera pan
+		rpcAct(14, -1)
+	case "j":
+		rpcAct(14, +1)
 
-		// Motors:
-		case "w":
-			if m.Action == "pressed" {
-				m1.Reverse(100)
-				m3.Forward(100)
-				m2.Reverse(100)
-				m4.Forward(100)
-			} else {
-				m1.Stop()
-				m3.Stop()
-				m2.Stop()
-				m4.Stop()
-			}
-		case "s":
-			if m.Action == "pressed" {
-				m1.Forward(100)
-				m3.Reverse(100)
-				m2.Forward(100)
-				m4.Reverse(100)
-			} else {
-				m1.Stop()
-				m3.Stop()
-				m2.Stop()
-				m4.Stop()
-			}
-		case "a":
-			if m.Action == "pressed" {
-				m1.Forward(100)
-				m3.Reverse(100)
-				m2.Reverse(100)
-				m4.Forward(100)
-			} else {
-				m1.Stop()
-				m3.Stop()
-				m2.Stop()
-				m4.Stop()
-			}
-		case "d":
-			if m.Action == "pressed" {
-				m1.Reverse(100)
-				m3.Forward(100)
-				m2.Forward(100)
-				m4.Reverse(100)
-			} else {
-				m1.Stop()
-				m3.Stop()
-				m2.Stop()
-				m4.Stop()
-			}
+	// Motors:
+	case "w":
+		if m.Action == "pressed" {
+			m1.Reverse(100)
+			m3.Forward(100)
+			m2.Reverse(100)
+			m4.Forward(100)
+		} else {
+			m1.Stop()
+			m3.Stop()
+			m2.Stop()
+			m4.Stop()
+		}
+	case "s":
+		if m.Action == "pressed" {
+			m1.Forward(100)
+			m3.Reverse(100)
+			m2.Forward(100)
+			m4.Reverse(100)
+		} else {
+			m1.Stop()
+			m3.Stop()
+			m2.Stop()
+			m4.Stop()
+		}
+	case "a":
+		if m.Action == "pressed" {
+			m1.Forward(100)
+			m3.Reverse(100)
+			m2.Reverse(100)
+			m4.Forward(100)
+		} else {
+			m1.Stop()
+			m3.Stop()
+			m2.Stop()
+			m4.Stop()
+		}
+	case "d":
+		if m.Action == "pressed" {
+			m1.Reverse(100)
+			m3.Forward(100)
+			m2.Forward(100)
+			m4.Reverse(100)
+		} else {
+			m1.Stop()
+			m3.Stop()
+			m2.Stop()
+			m4.Stop()
+		}
+	}
+	return nil
+}
+
+func validControlKey(key string) bool {
+	switch key {
+	case "w", "a", "s", "d", "t", "f", "g", "h", "i", "j", "k", "l", "r", "y":
+		return true
+	default:
+		return false
+	}
+}
+
+// StopAll is the safety stop used when the controller disconnects or becomes
+// unresponsive. It is safe to call more than once.
+func (c *Controller) StopAll() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	for key := range c.pressed {
+		c.pressed[key] = false
+	}
+	for _, motor := range c.motors {
+		motor.Stop()
+	}
+	if c.servoClient == nil {
+		return
+	}
+	for _, channel := range []int32{4, 5, 6, 14, 15} {
+		ctx, cancel := context.WithTimeout(context.Background(), 250*time.Millisecond)
+		_, err := c.servoClient.Stop(ctx, &pb.StopRequest{Channel: channel})
+		cancel()
+		if err != nil {
+			log.Printf("servo %d safety stop: %v", channel, err)
 		}
 	}
 }
 
 func RunFFmpegCLI(args []string) {
-	log.Printf("running ffmpeg %v", args)
-	cmd := exec.Command("ffmpeg", args...)
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-	if err := cmd.Run(); err != nil {
-		log.Fatalf("ffmpeg failed: %v", err)
-	}
-}
-
-// runFFmpegFileCLI streams a local file at realtime speed (-re) into a single RTP output URL.
-func RunFFmpegFileCLI(inputFile, output string, outArgs map[string]string) {
-	// global + -re + input
-	args := []string{
-		"-y",
-		"-hide_banner",
-		"-loglevel", "warning",
-		"-re", // read input “in realtime”
-		"-i", inputFile,
-	}
-	// output flags
-	for flag, val := range outArgs {
-		f := flag
-		if !strings.HasPrefix(f, "-") {
-			f = "-" + f
-		}
-		args = append(args, f)
-		if val != "" {
-			args = append(args, val)
-		}
-	}
-	args = append(args, output)
-
 	log.Printf("running ffmpeg %v", args)
 	cmd := exec.Command("ffmpeg", args...)
 	cmd.Stdout = os.Stdout

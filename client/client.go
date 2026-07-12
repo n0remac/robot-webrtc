@@ -1,3 +1,5 @@
+//go:build webrtc_legacy
+
 package client
 
 import (

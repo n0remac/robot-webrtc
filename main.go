@@ -9,7 +9,6 @@ import (
 	"time"
 
 	"github.com/gorilla/websocket"
-	. "github.com/n0remac/robot-webrtc/cards"
 	. "github.com/n0remac/robot-webrtc/webrtc"
 	. "github.com/n0remac/robot-webrtc/websocket"
 )
@@ -30,15 +29,10 @@ func main() {
 	// create global registry
 	globalRegistry := NewCommandRegistry()
 
-	// Apps
-	Home(mux, globalRegistry)
-	VideoHandler(mux, globalRegistry)
-	GameUI(mux, globalRegistry)
-	ShadowReddit(mux)
-	GenerateStory(mux)
-	Trick(mux)
-	Fantasy(mux)
-	Notecard(mux, globalRegistry)
+	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, "/robot/", http.StatusFound)
+	})
+	RobotHandler(mux, globalRegistry)
 
 	WithWS("/ws/logs", mux, logSocketWS)
 

@@ -1,0 +1,52 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Robot Control</title>
+  <style>
+    :root { color-scheme: dark; font-family: system-ui, sans-serif; }
+    * { box-sizing: border-box; }
+    body { margin: 0; background: #090909; color: #eee; }
+    main { width: min(100% - 24px, 920px); margin: 24px auto; }
+    header { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
+    h1, h2 { margin: 0 0 12px; }
+    #status { color: #ffb454; }
+    #status.connected { color: #71d995; }
+    .camera { display: grid; place-items: center; min-height: 240px; background: #111; border: 1px solid #333; border-radius: 10px; overflow: hidden; }
+    .camera img { display: block; width: 100%; max-width: 640px; aspect-ratio: 4 / 3; object-fit: contain; }
+    .controls { display: grid; grid-template-columns: repeat(4, 1fr); gap: 24px; margin-top: 24px; }
+    .group { text-align: center; }
+    .pad { display: grid; grid-template-columns: repeat(3, 54px); justify-content: center; gap: 8px; }
+    button { width: 54px; height: 48px; border: 1px solid #444; border-bottom-width: 4px; border-radius: 8px; background: #292929; color: #eee; font-weight: 700; touch-action: none; user-select: none; }
+    button.active { transform: translateY(2px); border-bottom-width: 2px; background: #465a74; }
+    .empty { width: 54px; }
+    @media (max-width: 720px) { .controls { grid-template-columns: repeat(2, 1fr); } }
+  </style>
+</head>
+<body>
+  <main>
+    <header><h1>Robot Control</h1><span id="status">Connecting…</span></header>
+    <div class="camera"><img src="/stream" alt="Robot camera stream"></div>
+    <div class="controls">
+      <section class="group"><h2>Move</h2><div class="pad">
+        <span class="empty"></span><button data-key="w">W</button><span class="empty"></span>
+        <button data-key="a">A</button><button data-key="s">S</button><button data-key="d">D</button>
+      </div></section>
+      <section class="group"><h2>Claw</h2><div class="pad">
+        <span class="empty"></span><button data-key="t">T</button><span class="empty"></span>
+        <button data-key="f">F</button><button data-key="g">G</button><button data-key="h">H</button>
+      </div></section>
+      <section class="group"><h2>Open / Close</h2><div class="pad">
+        <span class="empty"></span><button data-key="r">R</button><span class="empty"></span>
+        <span class="empty"></span><button data-key="y">Y</button><span class="empty"></span>
+      </div></section>
+      <section class="group"><h2>Camera</h2><div class="pad">
+        <span class="empty"></span><button data-key="i">I</button><span class="empty"></span>
+        <button data-key="j">J</button><button data-key="k">K</button><button data-key="l">L</button>
+      </div></section>
+    </div>
+  </main>
+  <script src="/app.js"></script>
+</body>
+</html>
