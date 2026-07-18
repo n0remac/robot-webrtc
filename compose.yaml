@@ -1,0 +1,60 @@
+services:
+  app:
+    build: .
+    restart: unless-stopped
+    environment:
+      ENVIRONMENT: production
+      PORT: "8080"
+      PUBLIC_ORIGIN: https://${SITE_HOST}
+      TURN_HOST: ${TURN_HOST}
+      TURN_PORT: "3478"
+      TURN_SHARED_SECRET_FILE: /run/secrets/turn_shared_secret
+      TURN_CREDENTIAL_TTL: "3600"
+    secrets:
+      - turn_shared_secret
+    expose:
+      - "8080"
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:8080/healthz"]
+      interval: 15s
+      timeout: 3s
+      retries: 3
+      start_period: 5s
+
+  caddy:
+    image: caddy:2.11.4-alpine
+    restart: unless-stopped
+    environment:
+      SITE_HOST: ${SITE_HOST}
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      app:
+        condition: service_healthy
+
+  turn:
+    image: coturn/coturn:4.14.0-r0-alpine
+    restart: unless-stopped
+    network_mode: host
+    entrypoint: ["/bin/sh", "/run/turn/entrypoint.sh"]
+    environment:
+      SERVER_PUBLIC_IP: ${SERVER_PUBLIC_IP}
+      TURN_HOST: ${TURN_HOST}
+    volumes:
+      - ./deploy/turn-entrypoint.sh:/run/turn/entrypoint.sh:ro
+    secrets:
+      - turn_shared_secret
+
+volumes:
+  caddy_data:
+  caddy_config:
+
+secrets:
+  turn_shared_secret:
+    file: ./secrets/turn_shared_secret

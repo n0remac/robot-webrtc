@@ -7,3 +7,5 @@ test-results/*
 tests/node_modules/*
 
 node_modules/*
+.env
+secrets/

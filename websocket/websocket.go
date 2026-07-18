@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"net/url"
 	"os"
 	"sync"
 
@@ -64,8 +65,15 @@ var Upgrader = websocket.Upgrader{
 			return true
 		}
 
-		// Default production restriction
-		return origin == "https://noremac.dev"
+		// Production WebSockets must come from the configured public site.
+		allowed := os.Getenv("PUBLIC_ORIGIN")
+		if allowed == "" {
+			return false
+		}
+		originURL, originErr := url.Parse(origin)
+		allowedURL, allowedErr := url.Parse(allowed)
+		return originErr == nil && allowedErr == nil &&
+			originURL.Scheme == allowedURL.Scheme && originURL.Host == allowedURL.Host
 	},
 	ReadBufferSize:  1024,
 	WriteBufferSize: 1024,

@@ -9,16 +9,14 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"strconv"
+	"strings"
 	"time"
 
 	. "github.com/n0remac/robot-webrtc/websocket"
 )
 
-// TURN credential settings
-var (
-	coturnSecret = os.Getenv("TURN_PASS")
-	coturnTTL    = int64(3600)
-)
+const defaultTurnTTL = int64(3600)
 
 // Message is the payload for WebRTC signalling
 type Message struct {
@@ -126,13 +124,75 @@ func broadcastWebRTC(room string, msg Message) {
 
 // handleTurnCredentials issues time‐limited TURN credentials
 func handleTurnCredentials(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		w.Header().Set("Allow", http.MethodGet)
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	secret := turnSharedSecret()
+	if secret == "" {
+		http.Error(w, "TURN is not configured", http.StatusServiceUnavailable)
+		return
+	}
+
 	user := r.URL.Query().Get("user")
 	if user == "" {
 		user = "anonymous"
 	}
-	username, password := generateTurnCredentials(coturnSecret, user, coturnTTL)
+	if len(user) > 128 {
+		http.Error(w, "user is too long", http.StatusBadRequest)
+		return
+	}
+	ttl := turnCredentialTTL()
+	username, password := generateTurnCredentials(secret, user, ttl)
+	host := strings.TrimSpace(os.Getenv("TURN_HOST"))
+	if host == "" {
+		host = r.Host
+		if colon := strings.LastIndex(host, ":"); colon >= 0 {
+			host = host[:colon]
+		}
+	}
+	port := strings.TrimSpace(os.Getenv("TURN_PORT"))
+	if port == "" {
+		port = "3478"
+	}
+	urls := []string{
+		fmt.Sprintf("turn:%s:%s?transport=udp", host, port),
+		fmt.Sprintf("turn:%s:%s?transport=tcp", host, port),
+	}
+
+	w.Header().Set("Cache-Control", "no-store")
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]string{"username": username, "password": password})
+	_ = json.NewEncoder(w).Encode(map[string]interface{}{
+		"username": username,
+		"password": password,
+		"ttl":      ttl,
+		"urls":     urls,
+		// The historical Pion robot client calls this field "uris".
+		"uris": urls,
+	})
+}
+
+func turnSharedSecret() string {
+	if filename := strings.TrimSpace(os.Getenv("TURN_SHARED_SECRET_FILE")); filename != "" {
+		secret, err := os.ReadFile(filename)
+		if err == nil {
+			return strings.TrimSpace(string(secret))
+		}
+	}
+	if secret := strings.TrimSpace(os.Getenv("TURN_SHARED_SECRET")); secret != "" {
+		return secret
+	}
+	// TURN_PASS is kept as a migration path for the previous deployment.
+	return strings.TrimSpace(os.Getenv("TURN_PASS"))
+}
+
+func turnCredentialTTL() int64 {
+	ttl, err := strconv.ParseInt(os.Getenv("TURN_CREDENTIAL_TTL"), 10, 64)
+	if err != nil || ttl < 60 || ttl > 86400 {
+		return defaultTurnTTL
+	}
+	return ttl
 }
 
 // generateTurnCredentials creates a Coturn username and HMAC‐signed password

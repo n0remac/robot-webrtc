@@ -1,0 +1,7 @@
+.git
+.github
+.env
+serverlogs
+dist
+node_modules
+**/*_test.go

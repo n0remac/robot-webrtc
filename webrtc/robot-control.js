@@ -1,5 +1,3 @@
-const domainName = window.location.hostname === "localhost" ? "localhost:8080" : "noremac.dev";
-const wsProtocol = window.location.protocol === "https:" ? "wss" : "ws";
 const ROOM = "robot";
 
 let myUUID = generateUUID();
@@ -23,14 +21,15 @@ window.addEventListener('beforeunload', () => {
 async function joinSession() {
     // Fetch TURN
     const turnData = await fetchTurnCredentials();
-    globalIceServers = [
-        { urls: 'stun:stun.l.google.com:19302' }
-    ];
-    if (turnData?.username && turnData?.password) {
-        globalIceServers.push(
-            { urls: 'turn:turn.noremac.dev:3478?transport=udp', username: turnData.username, credential: turnData.password },
-            { urls: 'turns:turn.noremac.dev:443?transport=tcp', username: turnData.username, credential: turnData.password }
-        );
+    globalIceServers = [];
+    if (turnData?.username && turnData?.password && turnData?.urls?.length) {
+        globalIceServers.push({
+            urls: turnData.urls,
+            username: turnData.username,
+            credential: turnData.password
+        });
+    } else {
+        throw new Error('TURN credentials are unavailable');
     }
     await connectWebSocket();
 }
@@ -69,16 +68,13 @@ async function connectWebSocket() {
   
     ws.onerror = e => Logger.error('WebSocket error', e);
     ws.onclose = (e) => {
-      if (e.code !== 1000) {
-        Logger.info('Trying to reconnect...');
-        setTimeout(connectWebSocket, 1000);
-      }
       if (pc) {
         pc.close();
         pc = null;
         Logger.info("Closed PeerConnection due to signaling disconnect");
       }
       if (e.code !== 1000) {
+        Logger.info('Trying to reconnect...');
         setTimeout(connectWebSocket, 1000);
       }
     };

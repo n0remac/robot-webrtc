@@ -15,17 +15,24 @@ jobs:
         with:
           go-version-file: go.mod
 
-      - name: Build Raspberry Pi client
+      - name: Build Raspberry Pi clients
         env:
           ROBOT_SITE_URL: ${{ secrets.ROBOT_SITE_URL }}
+          ROBOT_WEBRTC_SIGNAL_URL: ${{ secrets.ROBOT_WEBRTC_SIGNAL_URL }}
         run: |
           test -n "$ROBOT_SITE_URL"
+          test -n "$ROBOT_WEBRTC_SIGNAL_URL"
           mkdir -p dist
           GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build \
             -ldflags "-X main.defaultSiteURL=$ROBOT_SITE_URL" \
             -o dist/robot-client ./cmd/client
+          GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build \
+            -ldflags "-X main.defaultSignalURL=$ROBOT_WEBRTC_SIGNAL_URL" \
+            -o dist/robot-webrtc-client ./cmd/webrtc-client
 
       - uses: actions/upload-artifact@v4
         with:
-          name: robot-client-linux-arm64
-          path: dist/robot-client
+          name: robot-clients-linux-arm64
+          path: |
+            dist/robot-client
+            dist/robot-webrtc-client
